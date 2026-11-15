@@ -107,8 +107,8 @@ function getGreeting() {
 
 export default function App() {
   const [student, setStudent] = useState(null);
-  const [acc, setAcc] = useState('24B000');
-  const [password, setPassword] = useState('Mess@2026!');
+  const [acc, setAcc] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
@@ -121,6 +121,12 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [activePanel, setActivePanel] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const noticeTimer = useRef(null);
 
@@ -273,8 +279,71 @@ export default function App() {
   }
 
   function openPanel(panel) {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordError('');
+    setPasswordMessage('');
     setActivePanel(panel);
     setDrawerOpen(false);
+  }
+
+  function closePanel() {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordError('');
+    setPasswordMessage('');
+    setActivePanel('');
+  }
+
+  async function updatePassword(event) {
+    event.preventDefault();
+    setPasswordError('');
+    setPasswordMessage('');
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError('Enter your current password and choose a new password.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setPasswordError('Your new password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('The new passwords do not match.');
+      return;
+    }
+    if (!supabase) {
+      setPasswordError('Password support is unavailable because Supabase is not configured.');
+      return;
+    }
+
+    setPasswordBusy(true);
+    try {
+      const email = `${student.id.trim().toLowerCase()}@demo.digimessbook.local`;
+      const { error: verifyError } = await supabase.auth.signInWithPassword({
+        email,
+        password: currentPassword,
+      });
+      if (verifyError) {
+        throw new Error(verifyError.message === 'Invalid login credentials'
+          ? 'Current password is incorrect.'
+          : verifyError.message);
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+      if (updateError) throw updateError;
+
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setPasswordMessage('Your password has been updated.');
+    } catch (updateError) {
+      setPasswordError(updateError.message || 'Unable to update your password. Please try again.');
+    } finally {
+      setPasswordBusy(false);
+    }
   }
 
   async function logout() {
@@ -418,7 +487,7 @@ export default function App() {
           </button>
           <span className="nav-label nav-label-spaced">SUPPORT</span>
           <button type="button" className="nav-item" onClick={() => openPanel('support')}>
-            <Icon name="lock" /><span>Password Support</span>
+            <Icon name="lock" /><span>Change Password</span>
           </button>
           <button type="button" className="nav-item" onClick={() => openPanel('help')}>
             <Icon name="help" /><span>Help &amp; Feedback</span>
@@ -630,12 +699,12 @@ export default function App() {
 
       {activePanel && (
         <div className="modal-backdrop">
-          <section className="modal-card info-modal" role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
+          <section className={`modal-card info-modal ${activePanel === 'support' && passwordMessage ? 'password-updated-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
             <div className="sheet-handle" />
             <header className="modal-header">
               <span className="section-icon"><Icon name={activePanel === 'profile' ? 'user' : activePanel === 'support' ? 'lock' : activePanel === 'help' ? 'help' : 'info'} /></span>
-              <div><span className="eyebrow">DIGIMESSBOOK</span><h2 id="info-modal-title">{activePanel === 'profile' ? 'My Profile' : activePanel === 'support' ? 'Password Support' : activePanel === 'help' ? 'Help & Feedback' : 'About DigiMessBook'}</h2></div>
-              <button type="button" className="icon-button modal-close" aria-label="Close" onClick={() => setActivePanel('')}><Icon name="close" /></button>
+              <div><span className="eyebrow">DIGIMESSBOOK</span><h2 id="info-modal-title">{activePanel === 'profile' ? 'My Profile' : activePanel === 'support' ? 'Change Password' : activePanel === 'help' ? 'Help & Feedback' : 'About DigiMessBook'}</h2></div>
+              <button type="button" className="icon-button modal-close" aria-label="Close" onClick={closePanel}><Icon name="close" /></button>
             </header>
             {activePanel === 'profile' ? (
               <div className="profile-details">
@@ -644,7 +713,51 @@ export default function App() {
                 <button type="button" className="outline-button profile-edit" onClick={() => { setActivePanel(''); openFoodPreferences(); }}>Edit food preference</button>
               </div>
             ) : activePanel === 'support' ? (
-              <div className="info-copy"><p>Password reset is not enabled for this local demo yet.</p><p>Use one of the seeded demo accounts to sign in. For a real account reset, contact the hostel mess administrator.</p><div className="support-demo"><b>Demo password</b><span>Mess@2026!</span></div></div>
+              passwordMessage ? (
+                <div className="password-support-complete" role="status">{passwordMessage}</div>
+              ) : (
+                <div className="info-copy">
+                  <p>Change your password securely from your signed-in account.</p>
+                  <form className="support-password-form" onSubmit={updatePassword}>
+                    <label className="field-label" htmlFor="current-password">Current password</label>
+                    <input
+                      className="support-password-input"
+                      id="current-password"
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPassword}
+                      onChange={event => setCurrentPassword(event.target.value)}
+                      required
+                    />
+                    <label className="field-label" htmlFor="new-password">New password</label>
+                    <input
+                      className="support-password-input"
+                      id="new-password"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={6}
+                      value={newPassword}
+                      onChange={event => setNewPassword(event.target.value)}
+                      required
+                    />
+                    <label className="field-label" htmlFor="confirm-new-password">Confirm new password</label>
+                    <input
+                      className="support-password-input"
+                      id="confirm-new-password"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={6}
+                      value={confirmPassword}
+                      onChange={event => setConfirmPassword(event.target.value)}
+                      required
+                    />
+                    {passwordError && <p className="password-support-error" role="alert">{passwordError}</p>}
+                    <button className="primary-button support-password-submit" type="submit" disabled={passwordBusy}>
+                      {passwordBusy ? 'Updating…' : 'Update password'}
+                    </button>
+                  </form>
+                </div>
+              )
             ) : activePanel === 'help' ? (
               <div className="info-copy"><p>For help with your account, meal preferences, or mess calendar, contact the MH NSSCE hostel mess office.</p><p>Your selected meals are saved to your student account when you choose <b>Update</b>.</p></div>
             ) : (

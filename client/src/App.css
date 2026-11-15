@@ -303,7 +303,13 @@ svg { flex: 0 0 auto; }
 .profile-edit { width: 100%; margin-top: 17px; }
 .info-copy { display: grid; gap: 13px; margin-top: 20px; color: #59685e; font-size: 14px; line-height: 1.65; }
 .info-copy p { margin: 0; }
-.support-demo { display: flex; justify-content: space-between; padding: 14px; border-radius: 13px; background: #f0f8eb; color: var(--green-900); font-size: 13px; }
+.support-password-form { display: grid; }
+.support-password-form .field-label:first-child { margin-top: 2px; }
+.support-password-input { width: 100%; min-height: 48px; padding: 11px 13px; border: 1px solid #dce5dc; border-radius: 13px; background: #fff; color: var(--ink); }
+.support-password-error { margin: 13px 0 0; color: #b42323; font-size: 13px; line-height: 1.5; }
+.support-password-submit { width: 100%; margin-top: 18px; }
+.password-updated-modal { display: flex; min-height: 360px; flex-direction: column; }
+.password-support-complete { display: grid; flex: 1; padding: 24px 10px; place-items: center; color: var(--green-800); font-size: 18px; font-weight: 650; line-height: 1.5; text-align: center; }
 .about-hostel { color: #718076; font-size: 12px; }
 
 /* Responsive navigation and mobile layout */

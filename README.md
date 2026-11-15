@@ -41,4 +41,4 @@ The local seed creates these accounts. All use password `Mess@2026!`.
 
 ## Current scope
 
-Login, profile retrieval, meal-day reads/updates, food preference updates, RLS, and the November 2026 demo data are implemented. Password reset email delivery and admin workflows are not implemented. Demo users and data are local only; no data or credentials have been copied to a hosted project.
+Login, profile retrieval, meal-day reads/updates, food preference updates, authenticated password changes, RLS, and the November 2026 demo data are implemented. Email-based password recovery and admin workflows are not implemented. Demo users and data are local only; no data or credentials have been copied to a hosted project.
