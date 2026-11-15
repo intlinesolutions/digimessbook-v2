@@ -485,6 +485,13 @@ export default function App() {
           <button type="button" className="nav-item" onClick={openFoodPreferences}>
             <Icon name="cloche" /><span>Food Preference</span>
           </button>
+          <span className="nav-label nav-label-spaced">DASHBOARDS</span>
+          <a className="nav-item nav-link" href="/mess-count" onClick={() => setDrawerOpen(false)}>
+            <Icon name="calendar" /><span>Mess Count</span>
+          </a>
+          <a className="nav-item nav-link" href="/students-list" onClick={() => setDrawerOpen(false)}>
+            <Icon name="user" /><span>Students List</span>
+          </a>
           <span className="nav-label nav-label-spaced">SUPPORT</span>
           <button type="button" className="nav-item" onClick={() => openPanel('support')}>
             <Icon name="lock" /><span>Change Password</span>
