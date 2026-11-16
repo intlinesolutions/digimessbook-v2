@@ -10,9 +10,17 @@ const meals = [
   ['t', 'Evening Tea', 'tea'],
   ['d', 'Dinner', 'dinner'],
 ];
+const foodOptions = ['Chicken', 'Fish', 'Egg', 'Beef', 'Veg only'];
 const dates = Array.from({ length: 30 }, (_, i) => new Date(2026, 10, i + 1));
 const keyOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const locked = d => Date.now() >= Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - 1, 13, 30);
+function orderedFoodItems(value) {
+  const selected = new Set((Array.isArray(value) ? value : String(value || '').split(','))
+    .map(item => item.trim())
+    .filter(Boolean));
+  return foodOptions.filter(item => selected.has(item));
+}
+const orderedFoodPreference = value => orderedFoodItems(value).join(', ');
 function lockDeadline(d) {
   const cutoff = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - 1, 13, 30));
   const date = new Intl.DateTimeFormat('en-GB', {
@@ -65,12 +73,15 @@ const iconShapes = {
   help: <><circle cx="12" cy="12" r="9" /><path d="M9.6 9a2.5 2.5 0 1 1 4.7 1.2c-.8 1.3-2.3 1.5-2.3 3.3m0 3h.01" /></>,
   info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5m0-8h.01" /></>,
   logout: <><path d="M10 17l5-5-5-5M15 12H3" /><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7" /></>,
+  chevron: <><path d="m9 18 6-6-6-6" /></>,
+  receipt: <><path d="M5 3 7 4.5 9 3l3 1.5L15 3l2 1.5L19 3v18l-2-1.5-2 1.5-3-1.5L9 21l-2-1.5L5 21V3Z" /><path d="M9 9h6m-6 4h6m-6 4h4" /></>,
   coffee: <><path d="M4 9h13v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9Zm13 2h2a2 2 0 1 1 0 4h-2M8 3c0 2 2 2 2 4M13 3c0 2 2 2 2 4" /></>,
   lunch: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="5" /><path d="M3 4v7m-2-7v4a2 2 0 0 0 4 0V4m-2 7v9m18-16v16m0-16c-2 2-3 5-3 8h3" /></>,
   tea: <><path d="M5 9h12v6a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V9Zm12 2h2a2 2 0 1 1 0 4h-2M9 3c0 2 2 2 2 4" /></>,
   dinner: <><path d="M3 17a9 9 0 0 1 18 0H3Zm-1 3h20M12 4V2m-6 5L4 5m14 2 2-2" /></>,
   arrow: <><path d="M5 12h14m-6-6 6 6-6 6" /></>,
   eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" /><circle cx="12" cy="12" r="2.5" /></>,
+  edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></>,
   cloche: <><path d="M7 20h10M5 17h14a2 2 0 0 0 2-2c0-5-3.7-9-9-9s-9 4-9 9a2 2 0 0 0 2 2Zm7-11V4" /><circle cx="12" cy="3" r="1" /></>,
 };
 
@@ -128,6 +139,8 @@ export default function App() {
   const [passwordError, setPasswordError] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [summaryModal, setSummaryModal] = useState('');
+  const [summaryMonthIsCurrent, setSummaryMonthIsCurrent] = useState(false);
   const noticeTimer = useRef(null);
 
   const total = useMemo(() => student ? billable(student.days) : 0, [student]);
@@ -247,7 +260,9 @@ export default function App() {
       setFoodError('Supabase is not configured.');
       return;
     }
-    const value = food.includes('Veg only') ? 'Veg only' : food.filter(item => item !== 'Veg only').join(', ');
+    const value = food.includes('Veg only')
+      ? 'Veg only'
+      : foodOptions.filter(item => item !== 'Veg only' && food.includes(item)).join(', ');
     setSavingFood(true);
     try {
       const { data: savedProfile, error: saveError } = await supabase
@@ -260,7 +275,7 @@ export default function App() {
       if (!savedProfile) throw new Error('The preference was not saved. Please try again.');
       const savedPreference = savedProfile.food_preference || '';
       setStudent(current => ({ ...current, foodPreference: savedPreference }));
-      setFood(savedPreference ? savedPreference.split(',').map(item => item.trim()) : []);
+      setFood(orderedFoodItems(savedPreference));
       setFoodOpen(false);
       showNotice('Preference saved');
     } catch (saveError) {
@@ -271,7 +286,7 @@ export default function App() {
   }
 
   function openFoodPreferences() {
-    setFood(student.foodPreference ? student.foodPreference.split(',').map(item => item.trim()) : []);
+    setFood(orderedFoodItems(student.foodPreference));
     setFoodError('');
     dismissNotice();
     setFoodOpen(true);
@@ -367,6 +382,15 @@ export default function App() {
   function goToCalendar() {
     setDrawerOpen(false);
     document.getElementById('calendar-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function openSummaryModal(panel) {
+    if (panel === 'total-bill') {
+      const today = new Date();
+      setSummaryMonthIsCurrent(today.getFullYear() === dates[0].getFullYear()
+        && today.getMonth() === dates[0].getMonth());
+    }
+    setSummaryModal(panel);
   }
 
   const pathname = window.location.pathname.replace(/\/+$/, '');
@@ -595,32 +619,57 @@ export default function App() {
             </section>
 
             <aside className="dashboard-side">
-              <section className="surface-card summary-card">
-                <div className="section-heading compact-heading">
-                  <span className="section-icon"><Icon name="calendar" /></span>
-                  <div><h2>Mess Summary</h2><p>November at a glance</p></div>
+              <section className="surface-card summary-card" aria-labelledby="summary-title">
+                <div className="summary-heading">
+                  <span className="summary-heading-icon"><Icon name="calendar" size={42} /></span>
+                  <h2 id="summary-title">Mess Summary <span>– November at a glance</span></h2>
                 </div>
-                <div className="summary-stats">
-                  <div className="stat-tile"><b>30</b><span>Total Days</span></div>
-                  <div className="stat-tile billable-tile"><b>{total}</b><span>Billable Days</span></div>
-                  <div className="stat-tile nonbillable-tile"><b>{30 - total}</b><span>Non-Billable</span></div>
+                <div className="summary-items">
+                  <button type="button" className="summary-item summary-billable" onClick={goToCalendar}>
+                    <span className="summary-item-icon"><Icon name="lunch" size={38} /></span>
+                    <span className="summary-item-divider" />
+                    <span className="summary-item-copy"><b>{total}</b><span>Billable Days</span></span>
+                    <Icon name="chevron" className="summary-item-chevron" size={30} />
+                  </button>
+                  <button type="button" className="summary-item summary-extras" onClick={() => openSummaryModal('extra-dishes')}>
+                    <span className="summary-item-icon"><Icon name="cloche" size={38} /></span>
+                    <span className="summary-item-divider" />
+                    <span className="summary-item-copy"><b>₹ 0</b><span>Extra Dishes</span></span>
+                    <Icon name="chevron" className="summary-item-chevron" size={30} />
+                  </button>
+                  <button type="button" className="summary-item summary-total" onClick={() => openSummaryModal('total-bill')}>
+                    <span className="summary-item-icon"><Icon name="receipt" size={38} /></span>
+                    <span className="summary-item-divider" />
+                    <span className="summary-item-copy"><b>N/A</b><span>Total Bill</span></span>
+                    <Icon name="chevron" className="summary-item-chevron" size={30} />
+                  </button>
                 </div>
-                <button type="button" className="primary-button update-meal-button" onClick={goToCalendar}>
-                  <Icon name="lunch" />Update Meal
-                </button>
-              </section>
-
-              <section className="surface-card preference-card">
-                <div className="section-heading compact-heading">
-                  <span className="section-icon"><Icon name="cloche" /></span>
-                  <div><h2>Food Preference</h2><p>Your meal preferences</p></div>
-                </div>
-                <p className="preference-value">{student.foodPreference || 'Not set yet'}</p>
-                <button type="button" className="outline-button preference-action" onClick={openFoodPreferences}>
-                  {student.foodPreference ? 'Edit preference' : 'Set preference'}
+                <p className="summary-hint">Select an item to see more details</p>
+                <button type="button" className="primary-button multiple-days-button" onClick={() => openSummaryModal('multiple-days')}>
+                  <Icon name="calendar" size={29} />
+                  <span>Update Multiple Days</span>
+                  <Icon name="chevron" className="multiple-days-chevron" size={26} />
                 </button>
               </section>
             </aside>
+          </div>
+
+          <div className="dashboard-preference-row">
+            <section className="surface-card preference-card">
+              <div className="preference-card-header">
+                <div className="preference-card-heading">
+                  <span className="section-icon"><Icon name="cloche" /></span>
+                  <div className="preference-card-copy"><h2>Food Preference</h2><p>Your selected meal options</p></div>
+                </div>
+                <button type="button" className="outline-button preference-action" onClick={openFoodPreferences}>
+                  <Icon name="edit" size={17} />Edit
+                </button>
+              </div>
+              <div className="preference-value-row">
+                <span className="preference-food-icon"><Icon name="dinner" size={27} /></span>
+                <p className="preference-value">{orderedFoodPreference(student.foodPreference) || 'Not set yet'}</p>
+              </div>
+            </section>
           </div>
         </main>
 
@@ -678,7 +727,7 @@ export default function App() {
             </header>
             <p className="modal-intro">Select the foods you would like included in your mess preference.</p>
             <div className="food-options">
-              {['Chicken', 'Fish', 'Egg', 'Beef', 'Veg only'].map(item => (
+              {foodOptions.map(item => (
                 <label className="food-option" key={item}>
                   <span>{item}</span>
                   <input
@@ -704,6 +753,51 @@ export default function App() {
         </div>
       )}
 
+      {summaryModal && (
+        <div className="modal-backdrop">
+          <section className="modal-card summary-modal" role="dialog" aria-modal="true" aria-labelledby="summary-modal-title">
+            <div className="sheet-handle" />
+            <header className="modal-header">
+              <span className="section-icon"><Icon name={summaryModal === 'total-bill' ? 'receipt' : summaryModal === 'multiple-days' ? 'calendar' : 'cloche'} /></span>
+              <div>
+                <span className="eyebrow">NOVEMBER 2026</span>
+                <h2 id="summary-modal-title">{summaryModal === 'extra-dishes' ? 'Extra Dishes' : summaryModal === 'total-bill' ? 'Total Bill' : 'Update Multiple Days'}</h2>
+              </div>
+              <button type="button" className="icon-button modal-close" aria-label="Close summary details" onClick={() => setSummaryModal('')}><Icon name="close" /></button>
+            </header>
+
+            {summaryModal === 'extra-dishes' && (
+              <div className="summary-empty-state">
+                <span className="summary-empty-icon"><Icon name="cloche" size={29} /></span>
+                <h3>No extra dishes recorded</h3>
+                <p>Extra dish selections for November 2026 will appear here.</p>
+              </div>
+            )}
+
+            {summaryModal === 'total-bill' && (
+              <div className="summary-bill-details">
+                <div className="summary-bill-amount"><span>Total for November</span><b>{summaryMonthIsCurrent ? 'N/A' : 'Not uploaded'}</b></div>
+                {summaryMonthIsCurrent ? (
+                  <p className="summary-bill-message">Bill not generated yet</p>
+                ) : (
+                  <div className="summary-empty-state summary-bill-empty">
+                    <p>No bill has been uploaded for November 2026 yet. The bill split-up will appear here when available.</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {summaryModal === 'multiple-days' && (
+              <div className="summary-empty-state">
+                <span className="summary-empty-icon"><Icon name="calendar" size={29} /></span>
+                <h3>Coming soon</h3>
+                <p>Multiple-day updates will be available here in a future update.</p>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
       {activePanel && (
         <div className="modal-backdrop">
           <section className={`modal-card info-modal ${activePanel === 'support' && passwordMessage ? 'password-updated-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
@@ -716,7 +810,7 @@ export default function App() {
             {activePanel === 'profile' ? (
               <div className="profile-details">
                 <div className="profile-identity"><span className="avatar avatar-large">{student.name?.trim().charAt(0).toUpperCase() || 'S'}</span><div><b>{student.name}</b><span>{student.hostel}</span></div></div>
-                <dl><div><dt>Account number</dt><dd>{student.id}</dd></div><div><dt>Room</dt><dd>{student.room || '—'}</dd></div><div><dt>Academic year</dt><dd>{student.year || '—'}</dd></div><div><dt>Food preference</dt><dd>{student.foodPreference || 'Not set'}</dd></div></dl>
+                <dl><div><dt>Account number</dt><dd>{student.id}</dd></div><div><dt>Room</dt><dd>{student.room || '—'}</dd></div><div><dt>Academic year</dt><dd>{student.year || '—'}</dd></div><div><dt>Food preference</dt><dd>{orderedFoodPreference(student.foodPreference) || 'Not set'}</dd></div></dl>
                 <button type="button" className="outline-button profile-edit" onClick={() => { setActivePanel(''); openFoodPreferences(); }}>Edit food preference</button>
               </div>
             ) : activePanel === 'support' ? (
