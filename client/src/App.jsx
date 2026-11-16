@@ -141,9 +141,17 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [summaryModal, setSummaryModal] = useState('');
   const [summaryMonthIsCurrent, setSummaryMonthIsCurrent] = useState(false);
+  const [rangeStart, setRangeStart] = useState(null);
+  const [rangeEnd, setRangeEnd] = useState(null);
+  const [rangeError, setRangeError] = useState('');
+  const [savingRange, setSavingRange] = useState(false);
   const noticeTimer = useRef(null);
 
   const total = useMemo(() => student ? billable(student.days) : 0, [student]);
+  const selectedRangeDates = rangeStart && rangeEnd
+    ? dates.filter(date => date >= rangeStart && date <= rangeEnd)
+    : [];
+  const rangeReady = selectedRangeDates.length >= 2 && selectedRangeDates.every(date => !locked(date));
 
   useEffect(() => () => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
@@ -248,6 +256,71 @@ export default function App() {
     setStudent(current => ({ ...current, days: { ...current.days, [date]: value } }));
     showNotice('Successfully updated');
     setTimeout(() => setSelected(null), 700);
+  }
+
+  function chooseRangeDate(date) {
+    if (locked(date) || savingRange) return;
+    setRangeError('');
+    if (!rangeStart || rangeEnd) {
+      setRangeStart(date);
+      setRangeEnd(null);
+      return;
+    }
+    if (date < rangeStart) {
+      setRangeStart(date);
+      setRangeEnd(null);
+      return;
+    }
+    if (date.getTime() === rangeStart.getTime()) {
+      setRangeError('Choose an end date after the start date to select multiple days.');
+      return;
+    }
+    const proposedRange = dates.filter(item => item >= rangeStart && item <= date);
+    if (proposedRange.some(locked)) {
+      setRangeError('The selected range includes a locked day. Choose unlocked days only.');
+      return;
+    }
+    setRangeEnd(date);
+  }
+
+  async function saveDayRange(value) {
+    const range = rangeStart && rangeEnd
+      ? dates.filter(date => date >= rangeStart && date <= rangeEnd)
+      : [];
+    if (range.length < 2 || range.some(locked)) {
+      setRangeError('Choose a range of at least two unlocked days.');
+      return;
+    }
+    if (!supabase) {
+      setRangeError('Supabase is not configured.');
+      return;
+    }
+    setRangeError('');
+    setSavingRange(true);
+    const rows = range.map(date => ({
+      student_id: student.studentId,
+      meal_date: keyOf(date),
+      meal_code: value,
+    }));
+    try {
+      const { error: saveError } = await supabase
+        .from('meal_days')
+        .upsert(rows, { onConflict: 'student_id,meal_date' });
+      if (saveError) {
+        setRangeError(saveError.message);
+        return;
+      }
+      const updatedDays = Object.fromEntries(range.map(date => [keyOf(date), value]));
+      setStudent(current => ({ ...current, days: { ...current.days, ...updatedDays } }));
+      setSummaryModal('');
+      setRangeStart(null);
+      setRangeEnd(null);
+      showNotice('Successfully updated');
+    } catch (saveError) {
+      setRangeError(saveError.message || 'Unable to update the selected days.');
+    } finally {
+      setSavingRange(false);
+    }
   }
 
   async function saveFood() {
@@ -385,12 +458,25 @@ export default function App() {
   }
 
   function openSummaryModal(panel) {
+    if (panel === 'multiple-days') {
+      setRangeStart(null);
+      setRangeEnd(null);
+      setRangeError('');
+    }
     if (panel === 'total-bill') {
       const today = new Date();
       setSummaryMonthIsCurrent(today.getFullYear() === dates[0].getFullYear()
         && today.getMonth() === dates[0].getMonth());
     }
     setSummaryModal(panel);
+  }
+
+  function closeSummaryModal() {
+    if (savingRange) return;
+    setSummaryModal('');
+    setRangeStart(null);
+    setRangeEnd(null);
+    setRangeError('');
   }
 
   const pathname = window.location.pathname.replace(/\/+$/, '');
@@ -569,8 +655,7 @@ export default function App() {
             <div className="welcome-account"><span className="avatar avatar-small">{student.name?.trim().charAt(0).toUpperCase() || 'S'}</span><span>Account<b>{student.id}</b></span></div>
           </section>
 
-          <div className="dashboard-grid">
-            <section className="surface-card calendar-card" id="calendar-card">
+          <section className="surface-card calendar-card" id="calendar-card">
               {notice && (
                 <div className={`notice-banner ${notice === 'Updating...' ? 'is-pending' : ''} ${notice === 'Successfully updated' || notice === 'Preference saved' || notice === 'Updating...' ? '' : 'is-error'}`} role="status" aria-live="polite">
                   <span>{notice}</span>
@@ -616,60 +701,61 @@ export default function App() {
                 <span><i className="legend-dot single-cut" />Single mess cut</span>
                 <span><i className="legend-dot adjacent-cut" />Adjacent mess cuts</span>
               </div>
-            </section>
+          </section>
 
-            <aside className="dashboard-side">
-              <section className="surface-card summary-card" aria-labelledby="summary-title">
-                <div className="summary-heading">
-                  <span className="summary-heading-icon"><Icon name="calendar" size={42} /></span>
-                  <h2 id="summary-title">Mess Summary <span>– November at a glance</span></h2>
-                </div>
-                <div className="summary-items">
-                  <button type="button" className="summary-item summary-billable" onClick={goToCalendar}>
-                    <span className="summary-item-icon"><Icon name="lunch" size={38} /></span>
-                    <span className="summary-item-divider" />
-                    <span className="summary-item-copy"><b>{total}</b><span>Billable Days</span></span>
-                    <Icon name="chevron" className="summary-item-chevron" size={30} />
-                  </button>
-                  <button type="button" className="summary-item summary-extras" onClick={() => openSummaryModal('extra-dishes')}>
-                    <span className="summary-item-icon"><Icon name="cloche" size={38} /></span>
-                    <span className="summary-item-divider" />
-                    <span className="summary-item-copy"><b>₹ 0</b><span>Extra Dishes</span></span>
-                    <Icon name="chevron" className="summary-item-chevron" size={30} />
-                  </button>
-                  <button type="button" className="summary-item summary-total" onClick={() => openSummaryModal('total-bill')}>
-                    <span className="summary-item-icon"><Icon name="receipt" size={38} /></span>
-                    <span className="summary-item-divider" />
-                    <span className="summary-item-copy"><b>N/A</b><span>Total Bill</span></span>
-                    <Icon name="chevron" className="summary-item-chevron" size={30} />
-                  </button>
-                </div>
-                <p className="summary-hint">Select an item to see more details</p>
-                <button type="button" className="primary-button multiple-days-button" onClick={() => openSummaryModal('multiple-days')}>
-                  <Icon name="calendar" size={29} />
-                  <span>Update Multiple Days</span>
-                  <Icon name="chevron" className="multiple-days-chevron" size={26} />
+          <div className="dashboard-lower-grid">
+            <section className="surface-card summary-card" aria-labelledby="summary-title">
+              <div className="summary-heading">
+                <span className="summary-heading-icon"><Icon name="calendar" size={42} /></span>
+                <h2 id="summary-title">Mess Summary <span>– November at a glance</span></h2>
+              </div>
+              <div className="summary-items">
+                <button type="button" className="summary-item summary-billable" onClick={goToCalendar}>
+                  <span className="summary-item-icon"><Icon name="lunch" size={38} /></span>
+                  <span className="summary-item-divider" />
+                  <span className="summary-item-copy"><b>{total}</b><span>Billable Days</span></span>
+                  <Icon name="chevron" className="summary-item-chevron" size={30} />
                 </button>
-              </section>
-            </aside>
-          </div>
-
-          <div className="dashboard-preference-row">
-            <section className="surface-card preference-card">
-              <div className="preference-card-header">
-                <div className="preference-card-heading">
-                  <span className="section-icon"><Icon name="cloche" /></span>
-                  <div className="preference-card-copy"><h2>Food Preference</h2><p>Your selected meal options</p></div>
-                </div>
-                <button type="button" className="outline-button preference-action" onClick={openFoodPreferences}>
-                  <Icon name="edit" size={17} />Edit
+                <button type="button" className="summary-item summary-extras" onClick={() => openSummaryModal('extra-dishes')}>
+                  <span className="summary-item-icon"><Icon name="cloche" size={38} /></span>
+                  <span className="summary-item-divider" />
+                  <span className="summary-item-copy"><b>₹ 0</b><span>Extra Dishes</span></span>
+                  <Icon name="chevron" className="summary-item-chevron" size={30} />
+                </button>
+                <button type="button" className="summary-item summary-total" onClick={() => openSummaryModal('total-bill')}>
+                  <span className="summary-item-icon"><Icon name="receipt" size={38} /></span>
+                  <span className="summary-item-divider" />
+                  <span className="summary-item-copy"><b>N/A</b><span>Total Bill</span></span>
+                  <Icon name="chevron" className="summary-item-chevron" size={30} />
                 </button>
               </div>
-              <div className="preference-value-row">
-                <span className="preference-food-icon"><Icon name="dinner" size={27} /></span>
-                <p className="preference-value">{orderedFoodPreference(student.foodPreference) || 'Not set yet'}</p>
-              </div>
+              <p className="summary-hint">Select an item to see more details</p>
             </section>
+
+            <div className="dashboard-secondary-column">
+              <button type="button" className="outline-button multiple-days-button" onClick={() => openSummaryModal('multiple-days')}>
+                <Icon name="calendar" size={24} />
+                <span>Update Multiple Days</span>
+                <Icon name="chevron" className="multiple-days-chevron" size={22} />
+              </button>
+
+              <div className="dashboard-preference-row">
+                <section className="surface-card preference-card">
+                  <div className="preference-card-header">
+                    <div className="preference-card-heading">
+                      <span className="section-icon"><Icon name="cloche" /></span>
+                      <div className="preference-card-copy"><h2>Food Preference</h2><p>Your selected meal options</p></div>
+                    </div>
+                    <button type="button" className="outline-button preference-action" onClick={openFoodPreferences}>
+                      <Icon name="edit" size={17} />Edit
+                    </button>
+                  </div>
+                  <div className="preference-value-row">
+                    <p className="preference-value">{orderedFoodPreference(student.foodPreference) || 'Not set yet'}</p>
+                  </div>
+                </section>
+              </div>
+            </div>
           </div>
         </main>
 
@@ -705,12 +791,12 @@ export default function App() {
             </div>
             {notice && <p className={`modal-notice ${notice === 'Updating...' ? 'is-pending' : ''}`} role="status">{notice}</p>}
             <div className="modal-actions">
-              <button type="button" className="outline-button" onClick={() => setSelected(null)}>Cancel</button>
-              <button type="button" className="primary-button" disabled={locked(selected)} onClick={() => saveDay(meals.map(([key]) => form[key] ? key.toUpperCase() : '-').join(''))}>Update</button>
+              <button type="button" className="outline-button cancel-day-button" onClick={() => setSelected(null)}>Cancel</button>
+              <button type="button" className="outline-button update-day-button" disabled={locked(selected)} onClick={() => saveDay(meals.map(([key]) => form[key] ? key.toUpperCase() : '-').join(''))}>Update</button>
             </div>
             <div className="quick-actions">
-              <button type="button" disabled={locked(selected)} onClick={() => saveDay('BLTD')}>Full Day</button>
-              <button type="button" disabled={locked(selected)} onClick={() => saveDay('----')}>Mess Cut</button>
+              <button type="button" className="primary-button quick-full-day" disabled={locked(selected)} onClick={() => saveDay('BLTD')}>Full Day</button>
+              <button type="button" className="quick-mess-cut" disabled={locked(selected)} onClick={() => saveDay('----')}>Mess Cut</button>
             </div>
           </section>
         </div>
@@ -763,7 +849,7 @@ export default function App() {
                 <span className="eyebrow">NOVEMBER 2026</span>
                 <h2 id="summary-modal-title">{summaryModal === 'extra-dishes' ? 'Extra Dishes' : summaryModal === 'total-bill' ? 'Total Bill' : 'Update Multiple Days'}</h2>
               </div>
-              <button type="button" className="icon-button modal-close" aria-label="Close summary details" onClick={() => setSummaryModal('')}><Icon name="close" /></button>
+              <button type="button" className="icon-button modal-close" aria-label="Close summary details" disabled={summaryModal === 'multiple-days' && savingRange} onClick={closeSummaryModal}><Icon name="close" /></button>
             </header>
 
             {summaryModal === 'extra-dishes' && (
@@ -788,10 +874,46 @@ export default function App() {
             )}
 
             {summaryModal === 'multiple-days' && (
-              <div className="summary-empty-state">
-                <span className="summary-empty-icon"><Icon name="calendar" size={29} /></span>
-                <h3>Coming soon</h3>
-                <p>Multiple-day updates will be available here in a future update.</p>
+              <div className="range-picker">
+                <p className="range-instructions">Select a start and end date. Locked days are unavailable, and every day between your choices will be included.</p>
+                <div className="range-selection-status" aria-live="polite">
+                  {rangeStart && rangeEnd
+                    ? `${rangeStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${rangeEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${selectedRangeDates.length} days`
+                    : rangeStart
+                      ? `Start: ${rangeStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}. Choose an end date.`
+                      : 'Choose an available start date.'}
+                </div>
+                <div className="range-weekdays" aria-hidden="true">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <span key={day}>{day}</span>)}
+                </div>
+                <div className="range-days" aria-label="Select a continuous date range">
+                  {Array(dates[0].getDay()).fill(0).map((_, index) => <span className="range-empty" key={`range-empty-${index}`} />)}
+                  {dates.map(date => {
+                    const isStart = !!rangeStart && keyOf(rangeStart) === keyOf(date);
+                    const isEnd = !!rangeEnd && keyOf(rangeEnd) === keyOf(date);
+                    const isInRange = !!rangeStart && !!rangeEnd && date > rangeStart && date < rangeEnd;
+                    const unavailable = locked(date);
+                    return (
+                      <button
+                        type="button"
+                        key={keyOf(date)}
+                        className={`range-day ${unavailable ? 'is-locked' : ''} ${isStart ? 'is-start' : ''} ${isEnd ? 'is-end' : ''} ${isInRange ? 'is-in-range' : ''}`}
+                        disabled={unavailable || savingRange}
+                        aria-pressed={isStart || isEnd || isInRange}
+                        aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${unavailable ? ', locked' : ''}`}
+                        onClick={() => chooseRangeDate(date)}
+                      >
+                        {date.getDate()}
+                      </button>
+                    );
+                  })}
+                </div>
+                {rangeError && <p className="range-error" role="alert">{rangeError}</p>}
+                <div className="range-modal-actions">
+                  <button type="button" className="outline-button range-cancel" disabled={savingRange} onClick={closeSummaryModal}>Cancel</button>
+                  <button type="button" className="primary-button range-full-day" disabled={!rangeReady || savingRange} onClick={() => saveDayRange('BLTD')}>{savingRange ? 'Updating…' : 'Full Day'}</button>
+                  <button type="button" className="outline-button range-mess-cut" disabled={!rangeReady || savingRange} onClick={() => saveDayRange('----')}>Mess Cut</button>
+                </div>
               </div>
             )}
           </section>
