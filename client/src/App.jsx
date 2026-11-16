@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { supabase } from './supabase';
 import MessCountPage from './MessCountPage.jsx';
 import StudentsListPage from './StudentsListPage.jsx';
+const SuperAdminPage = lazy(() => import('./SuperAdminPage.jsx'));
 
 const meals = [
   ['b', 'Breakfast', 'coffee'],
@@ -13,7 +14,13 @@ const meals = [
 const foodOptions = ['Chicken', 'Fish', 'Egg', 'Beef', 'Veg only'];
 const dates = Array.from({ length: 30 }, (_, i) => new Date(2026, 10, i + 1));
 const keyOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const locked = d => Date.now() >= Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - 1, 13, 30);
+const locked = (d, rules, closedDays) => {
+  if (closedDays?.[keyOf(d)] === 'closed') return true;
+  const lockDays = Number(rules?.lock_days_before ?? 1);
+  const lockTime = String(rules?.lock_time || '19:00').slice(0, 5);
+  const cutoffDate = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - lockDays));
+  return Date.now() >= new Date(`${keyOf(cutoffDate)}T${lockTime}:00+05:30`).getTime();
+};
 function orderedFoodItems(value) {
   const selected = new Set((Array.isArray(value) ? value : String(value || '').split(','))
     .map(item => item.trim())
@@ -21,8 +28,10 @@ function orderedFoodItems(value) {
   return foodOptions.filter(item => selected.has(item));
 }
 const orderedFoodPreference = value => orderedFoodItems(value).join(', ');
-function lockDeadline(d) {
-  const cutoff = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - 1, 13, 30));
+function lockDeadline(d, rules) {
+  const lockDays = Number(rules?.lock_days_before ?? 1);
+  const lockTime = String(rules?.lock_time || '19:00').slice(0, 5);
+  const cutoff = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate() - lockDays));
   const date = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kolkata',
     day: 'numeric',
@@ -34,7 +43,7 @@ function lockDeadline(d) {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-  }).format(cutoff).toUpperCase();
+  }).format(new Date(`${keyOf(cutoff)}T${lockTime}:00+05:30`)).toUpperCase();
   return `${date} at ${time} IST`;
 }
 const isToday = d => {
@@ -122,6 +131,15 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [forgotMode, setForgotMode] = useState(false);
+  const [forgotAccountNumber, setForgotAccountNumber] = useState('');
+  const [forgotAdmissionNumber, setForgotAdmissionNumber] = useState('');
+  const [forgotOtp, setForgotOtp] = useState('');
+  const [forgotOtpSent, setForgotOtpSent] = useState(false);
+  const [forgotComplete, setForgotComplete] = useState(false);
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+  const [forgotMessage, setForgotMessage] = useState('');
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({});
   const [foodOpen, setFoodOpen] = useState(false);
@@ -139,6 +157,10 @@ export default function App() {
   const [passwordError, setPasswordError] = useState('');
   const [passwordMessage, setPasswordMessage] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationError, setNotificationError] = useState('');
+  const [messRules, setMessRules] = useState({ lock_days_before: 1, lock_time: '19:00:00', timezone: 'Asia/Kolkata' });
+  const [closedDays, setClosedDays] = useState({});
   const [summaryModal, setSummaryModal] = useState('');
   const [summaryMonthIsCurrent, setSummaryMonthIsCurrent] = useState(false);
   const [rangeStart, setRangeStart] = useState(null);
@@ -146,21 +168,79 @@ export default function App() {
   const [rangeError, setRangeError] = useState('');
   const [savingRange, setSavingRange] = useState(false);
   const noticeTimer = useRef(null);
+  const welcomeNameRef = useRef(null);
 
+  const isDateLocked = date => locked(date, messRules, closedDays);
   const total = useMemo(() => student ? billable(student.days) : 0, [student]);
   const selectedRangeDates = rangeStart && rangeEnd
     ? dates.filter(date => date >= rangeStart && date <= rangeEnd)
     : [];
-  const rangeReady = selectedRangeDates.length >= 2 && selectedRangeDates.every(date => !locked(date));
+  const rangeReady = selectedRangeDates.length >= 2 && selectedRangeDates.every(date => !isDateLocked(date));
 
   useEffect(() => () => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
   }, []);
 
+  useEffect(() => {
+    if (student?.studentId) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [student?.studentId]);
+
+  useEffect(() => {
+    const element = welcomeNameRef.current;
+    if (!element) return undefined;
+    let frame = 0;
+    const fitName = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        element.style.removeProperty('font-size');
+        const availableWidth = element.clientWidth;
+        const naturalWidth = element.scrollWidth;
+        const baseSize = Number.parseFloat(window.getComputedStyle(element).fontSize);
+        if (availableWidth > 0 && naturalWidth > availableWidth) {
+          element.style.fontSize = `${baseSize * availableWidth / naturalWidth}px`;
+        }
+      });
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fitName);
+    if (element.parentElement) observer?.observe(element.parentElement);
+    window.addEventListener('resize', fitName);
+    fitName();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', fitName);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [student?.name]);
+
+  useEffect(() => {
+    if (!student?.studentId || !supabase) return undefined;
+    let active = true;
+    const pollNotifications = async () => {
+      const { data: rows, error: fetchError } = await supabase.from('student_notifications')
+        .select('id,title,message,created_at,read_at').eq('student_id', student.studentId)
+        .order('created_at', { ascending: false }).limit(20);
+      if (active && !fetchError) setNotifications(rows || []);
+    };
+    const intervalId = window.setInterval(pollNotifications, 15000);
+    return () => { active = false; window.clearInterval(intervalId); };
+  }, [student?.studentId]);
+
   function dismissNotice() {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = null;
     setNotice('');
+  }
+
+  async function removeReadNotification(notificationId) {
+    if (!supabase || !student?.studentId) return;
+    setNotificationError('');
+    const { error: deleteError } = await supabase.from('student_notifications').delete()
+      .eq('id', notificationId).eq('student_id', student.studentId);
+    if (deleteError) {
+      setNotificationError(deleteError.message || 'Unable to remove this notification.');
+      return;
+    }
+    setNotifications(current => current.filter(item => item.id !== notificationId));
   }
 
   function showNotice(message) {
@@ -191,10 +271,13 @@ export default function App() {
         password,
       });
       if (authError) throw authError;
+      supabase.functions.invoke('super-admin', { body: { action: 'record-login' } })
+        .then(({ error: activityError }) => { if (activityError) console.warn('Unable to record the student login activity.', activityError); })
+        .catch(activityError => console.warn('Unable to record the student login activity.', activityError));
 
       const { data: profile, error: profileError } = await supabase
         .from('students')
-        .select('id,account_number,full_name,room,academic_year,food_preference,hostels(name)')
+        .select('id,tenant_id,account_number,admission_number,full_name,hostel_id,room,academic_year,department,email,mobile_number,guardian_name,guardian_relation,guardian_mobile_number,blood_group,food_preference,hostels(name)')
         .eq('user_id', auth.user.id)
         .single();
       if (profileError) throw profileError;
@@ -208,17 +291,44 @@ export default function App() {
         .order('meal_date');
       if (mealError) throw mealError;
 
+      const { data: notificationRows, error: notificationReadError } = await supabase
+        .from('student_notifications')
+        .select('id,title,message,created_at,read_at')
+        .eq('student_id', profile.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      const [settingsResult, closedDaysResult] = await Promise.all([
+        supabase.from('mess_settings').select('lock_days_before,lock_time,timezone').eq('tenant_id', profile.tenant_id).maybeSingle(),
+        supabase.from('mess_calendar').select('calendar_date,status').eq('tenant_id', profile.tenant_id)
+          .gte('calendar_date', '2026-11-01').lte('calendar_date', '2026-11-30'),
+      ]);
+      if (settingsResult.error) throw settingsResult.error;
+      if (closedDaysResult.error) throw closedDaysResult.error;
+
       const days = Object.fromEntries(mealRows.map(row => [row.meal_date, row.meal_code.trim()]));
       setStudent({
         id: profile.account_number,
         name: profile.full_name,
+        admissionNumber: profile.admission_number,
         room: profile.room,
         year: profile.academic_year,
+        department: profile.department,
         hostel: profile.hostels?.name || 'MH NSSCE',
+        email: profile.email,
+        mobileNumber: profile.mobile_number,
+        guardianName: profile.guardian_name,
+        guardianRelation: profile.guardian_relation,
+        guardianMobileNumber: profile.guardian_mobile_number,
+        bloodGroup: profile.blood_group,
         foodPreference: profile.food_preference,
         days,
         studentId: profile.id,
       });
+      setNotifications(notificationReadError ? [] : (notificationRows || []));
+      setNotificationError('');
+      setMessRules(settingsResult.data || { lock_days_before: 1, lock_time: '19:00:00', timezone: 'Asia/Kolkata' });
+      setClosedDays(Object.fromEntries((closedDaysResult.data || []).map(day => [day.calendar_date, day.status])));
       if (!profile.food_preference) setFoodOpen(true);
     } catch (loginError) {
       setError(loginError.message === 'Invalid login credentials'
@@ -226,6 +336,73 @@ export default function App() {
         : loginError.message || 'Unable to sign in.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  function openForgotPassword() {
+    setError('');
+    setForgotAccountNumber(acc);
+    setForgotAdmissionNumber('');
+    setForgotOtp('');
+    setForgotOtpSent(false);
+    setForgotComplete(false);
+    setForgotError('');
+    setForgotMessage('');
+    setForgotMode(true);
+  }
+
+  function closeForgotPassword() {
+    setError('');
+    setForgotMode(false);
+    setForgotOtp('');
+    setForgotOtpSent(false);
+    setForgotComplete(false);
+    setForgotError('');
+    setForgotMessage('');
+  }
+
+  async function submitForgotPassword(event) {
+    event.preventDefault();
+    setForgotError('');
+    setForgotMessage('');
+    if (!supabase) {
+      setForgotError('Password reset is unavailable. Please contact the mess office.');
+      return;
+    }
+    if (!forgotAccountNumber.trim() || !forgotAdmissionNumber.trim()) {
+      setForgotError('Enter your account number and admission number.');
+      return;
+    }
+    if (forgotOtpSent && !/^\d{6}$/.test(forgotOtp.trim())) {
+      setForgotError('Enter the six-digit OTP sent to your registered email.');
+      return;
+    }
+
+    setForgotBusy(true);
+    try {
+      const action = forgotOtpSent ? 'confirm-student-password-reset' : 'request-student-password-reset';
+      const body = {
+        action,
+        accountNumber: forgotAccountNumber.trim(),
+        admissionNumber: forgotAdmissionNumber.trim(),
+        ...(forgotOtpSent ? { otp: forgotOtp.trim() } : {}),
+      };
+      const { data, error: resetError } = await supabase.functions.invoke('super-admin', { body });
+      if (resetError || data?.error) throw resetError || new Error(data.error);
+      if (forgotOtpSent) {
+        setForgotComplete(true);
+        setForgotOtp('');
+        setForgotMessage('Your password has been reset. Sign in using the default student password.');
+      } else {
+        setForgotOtpSent(true);
+        setForgotMessage('If these details match a student record with an email on file, an OTP will be sent there.');
+      }
+    } catch {
+      setForgotError(forgotOtpSent
+        ? 'Unable to verify that OTP. Check the code and try again.'
+        : 'Unable to send an OTP right now. Please try again later or contact the mess office.');
+    } finally {
+      setForgotBusy(false);
     }
   }
 
@@ -240,7 +417,7 @@ export default function App() {
   }
 
   async function saveDay(value) {
-    if (locked(selected) || !supabase) return;
+    if (isDateLocked(selected) || !supabase) return;
     dismissNotice();
     setNotice('Updating...');
     const date = keyOf(selected);
@@ -259,7 +436,7 @@ export default function App() {
   }
 
   function chooseRangeDate(date) {
-    if (locked(date) || savingRange) return;
+    if (isDateLocked(date) || savingRange) return;
     setRangeError('');
     if (!rangeStart || rangeEnd) {
       setRangeStart(date);
@@ -445,6 +622,7 @@ export default function App() {
       }
     }
     setStudent(null);
+    setNotifications([]);
     setSelected(null);
     setFoodOpen(false);
     setFood([]);
@@ -482,6 +660,9 @@ export default function App() {
   const pathname = window.location.pathname.replace(/\/+$/, '');
   if (pathname === '/mess-count') return <MessCountPage />;
   if (pathname === '/students-list') return <StudentsListPage />;
+  if (pathname === '/super-admin' || pathname.startsWith('/super-admin/')) {
+    return <Suspense fallback={<main className="sa-gate"><p>Loading super-admin workspace…</p></main>}><SuperAdminPage /></Suspense>;
+  }
 
   if (!student) {
     return (
@@ -499,63 +680,131 @@ export default function App() {
           </section>
 
           <section className="login-panel">
-            <form className="login-form" onSubmit={login}>
+            <form className="login-form" onSubmit={forgotMode ? submitForgotPassword : login}>
               <div className="login-heading">
-                <span className="eyebrow">WELCOME BACK</span>
-                <h2>Sign in to your mess book</h2>
-                <p>Manage your meals and keep your calendar up to date.</p>
+                <span className="eyebrow">{forgotMode ? 'ACCOUNT RECOVERY' : 'WELCOME BACK'}</span>
+                <h2>{forgotMode ? 'Reset your password' : 'Sign in to your mess book'}</h2>
+                <p>{forgotMode
+                  ? 'Verify your student details with an OTP sent to your registered email.'
+                  : 'Manage your meals and keep your calendar up to date.'}</p>
               </div>
 
-              <label className="field-label" htmlFor="account-number">Account Number</label>
-              <div className="login-input-row">
-                <Icon name="account" />
-                <input
-                  id="account-number"
-                  autoComplete="username"
-                  placeholder="Enter your account number"
-                  value={acc}
-                  onChange={event => setAcc(event.target.value)}
-                />
-              </div>
+              {forgotMode ? (
+                <>
+                  <label className="field-label" htmlFor="reset-account-number">Account Number</label>
+                  <div className="login-input-row">
+                    <Icon name="account" />
+                    <input
+                      id="reset-account-number"
+                      autoComplete="username"
+                      placeholder="Enter your account number"
+                      value={forgotAccountNumber}
+                      onChange={event => setForgotAccountNumber(event.target.value)}
+                      disabled={forgotBusy || forgotComplete}
+                    />
+                  </div>
 
-              <label className="field-label" htmlFor="account-password">Password</label>
-              <div className="login-input-row">
-                <Icon name="lock" />
-                <input
-                  id="account-password"
-                  autoComplete="current-password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="Enter your password"
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  onClick={() => setShowPassword(value => !value)}
-                >
-                  <Icon name="eye" size={20} />
-                </button>
-              </div>
+                  <label className="field-label" htmlFor="reset-admission-number">Admission Number</label>
+                  <div className="login-input-row">
+                    <Icon name="account" />
+                    <input
+                      id="reset-admission-number"
+                      autoComplete="off"
+                      placeholder="Enter your admission number"
+                      value={forgotAdmissionNumber}
+                      onChange={event => setForgotAdmissionNumber(event.target.value)}
+                      disabled={forgotBusy || forgotComplete}
+                    />
+                  </div>
 
-              {error && <p className="login-error" role="alert">{error}</p>}
-              <button className="primary-button login-submit" type="submit" disabled={busy}>
-                {busy ? 'Signing in…' : 'Login'}
-                {!busy && <Icon name="arrow" size={20} />}
-              </button>
+                  {forgotOtpSent && !forgotComplete && (
+                    <>
+                      <label className="field-label" htmlFor="reset-otp">OTP</label>
+                      <div className="login-input-row">
+                        <Icon name="lock" />
+                        <input
+                          id="reset-otp"
+                          autoComplete="one-time-code"
+                          inputMode="numeric"
+                          pattern="[0-9]{6}"
+                          maxLength={6}
+                          placeholder="Enter the six-digit OTP"
+                          value={forgotOtp}
+                          onChange={event => setForgotOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                          disabled={forgotBusy}
+                        />
+                      </div>
+                    </>
+                  )}
 
-              <p className="login-help">
-                Forgot password?{' '}
-                <button type="button" className="text-button" onClick={() => setError('For local testing use a seeded demo account. Hosted password reset will be configured later.')}>
-                  Get Help
-                </button>
-              </p>
-              <div className="demo-note">
-                <b>Local demo</b>
-                <span>Accounts: 24B000, 24B001, 24B002</span>
-                <span>Password: Mess@2026!</span>
-              </div>
+                  {forgotError && <p className="login-error" role="alert">{forgotError}</p>}
+                  {forgotMessage && <p className="login-success" role="status">{forgotMessage}</p>}
+                  {!forgotComplete && (
+                    <button className="primary-button login-submit" type="submit" disabled={forgotBusy}>
+                      {forgotBusy ? 'Please wait…' : forgotOtpSent ? 'Reset password' : 'Send OTP'}
+                      {!forgotBusy && <Icon name="arrow" size={20} />}
+                    </button>
+                  )}
+                  <p className="login-help">
+                    <button type="button" className="text-button" onClick={closeForgotPassword}>
+                      Back to login
+                    </button>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <label className="field-label" htmlFor="account-number">Account Number</label>
+                  <div className="login-input-row">
+                    <Icon name="account" />
+                    <input
+                      id="account-number"
+                      autoComplete="username"
+                      placeholder="Enter your account number"
+                      value={acc}
+                      onChange={event => setAcc(event.target.value)}
+                    />
+                  </div>
+
+                  <label className="field-label" htmlFor="account-password">Password</label>
+                  <div className="login-input-row">
+                    <Icon name="lock" />
+                    <input
+                      id="account-password"
+                      autoComplete="current-password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={event => setPassword(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      onClick={() => setShowPassword(value => !value)}
+                    >
+                      <Icon name="eye" size={20} />
+                    </button>
+                  </div>
+
+                  {error && <p className="login-error" role="alert">{error}</p>}
+                  <button className="primary-button login-submit" type="submit" disabled={busy}>
+                    {busy ? 'Signing in…' : 'Login'}
+                    {!busy && <Icon name="arrow" size={20} />}
+                  </button>
+
+                  <p className="login-help">
+                    Forgot password?{' '}
+                    <button type="button" className="text-button" onClick={openForgotPassword}>
+                      Get Help
+                    </button>
+                  </p>
+                  <div className="demo-note">
+                    <b>Local demo</b>
+                    <span>Accounts: 24B000, 24B001, 24B002</span>
+                    <span>Password: Mess@2026!</span>
+                  </div>
+                </>
+              )}
             </form>
           </section>
         </div>
@@ -631,14 +880,42 @@ export default function App() {
             <span className="mobile-brand"><Icon name="cloche" size={23} />DigiMessBook</span>
             <span className="topbar-context">Student dashboard</span>
             <div className="notification-wrap">
-              <button type="button" className="icon-button notification-button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen(value => !value)}>
+              <button type="button" className="icon-button notification-button" aria-label={`Notifications${notifications.some(item => !item.read_at) ? `, ${notifications.filter(item => !item.read_at).length} unread` : ''}`} aria-expanded={notificationsOpen} onClick={async () => {
+                const opening = !notificationsOpen;
+                setNotificationsOpen(opening);
+                setNotificationError('');
+                let currentNotifications = notifications;
+                if (opening && supabase) {
+                  const { data: latestNotifications, error: fetchError } = await supabase.from('student_notifications')
+                    .select('id,title,message,created_at,read_at').eq('student_id', student.studentId)
+                    .order('created_at', { ascending: false }).limit(20);
+                  if (!fetchError) {
+                    currentNotifications = latestNotifications || [];
+                    setNotifications(currentNotifications);
+                  } else setNotificationError(fetchError.message || 'Unable to load notifications.');
+                }
+                const unreadIds = currentNotifications.filter(item => !item.read_at).map(item => item.id);
+                if (opening && unreadIds.length && supabase) {
+                  const readAt = new Date().toISOString();
+                  const { error: readError } = await supabase.from('student_notifications').update({ read_at: readAt }).in('id', unreadIds);
+                  if (!readError) setNotifications(currentNotifications.map(item => unreadIds.includes(item.id) ? { ...item, read_at: readAt } : item));
+                  else setNotificationError(readError.message || 'Unable to mark notifications as read.');
+                }
+              }}>
                 <Icon name="bell" />
-                <i />
+                {notifications.some(item => !item.read_at) && <i />}
               </button>
               {notificationsOpen && (
-                <div className="notification-popover" role="status">
-                  <b>You’re all caught up</b>
-                  <p>Meal updates and reminders will appear here.</p>
+                <div className="notification-popover" role="status" aria-label="Your notifications">
+                  <b>{notifications.length ? 'Notifications' : 'You’re all caught up'}</b>
+                  {notificationError && <p className="student-notification-error" role="alert">{notificationError}</p>}
+                  {notifications.length ? notifications.map(item => (
+                    <div className="student-notification" key={item.id}>
+                      <strong>{item.title}</strong>
+                      <p>{item.message}</p>
+                      <div className="student-notification-footer"><small>{new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' }).format(new Date(item.created_at))}</small>{item.read_at && <button type="button" className="student-notification-remove" onClick={() => removeReadNotification(item.id)}>Remove</button>}</div>
+                    </div>
+                  )) : <p>Meal updates and reminders will appear here.</p>}
                 </div>
               )}
             </div>
@@ -649,7 +926,7 @@ export default function App() {
           <section className="welcome-row">
             <div>
               <p className="greeting">{getGreeting()},</p>
-              <h1>{student.name?.split(' ')[0]} <span aria-hidden="true">👋</span></h1>
+              <h1 ref={welcomeNameRef} className="welcome-student-name">{student.name} <span aria-hidden="true">👋</span></h1>
               <p className="welcome-meta">{student.hostel} <span>·</span> Room {student.room}</p>
             </div>
             <div className="welcome-account"><span className="avatar avatar-small">{student.name?.trim().charAt(0).toUpperCase() || 'S'}</span><span>Account<b>{student.id}</b></span></div>
@@ -685,8 +962,8 @@ export default function App() {
                     <button
                       type="button"
                       key={keyOf(date)}
-                      className={`day ${locked(date) ? 'locked' : ''} ${isToday(date) ? 'is-today' : ''} ${selected && keyOf(selected) === keyOf(date) ? 'is-selected' : ''}`}
-                      aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${locked(date) ? ', locked' : ''}`}
+                      className={`day ${isDateLocked(date) ? 'locked' : ''} ${isToday(date) ? 'is-today' : ''} ${selected && keyOf(selected) === keyOf(date) ? 'is-selected' : ''}`}
+                      aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${isDateLocked(date) ? ', locked' : ''}`}
                       onClick={() => openDay(date)}
                     >
                       <span>{date.getDate()}</span>
@@ -779,7 +1056,7 @@ export default function App() {
             <div className="meal-options">
               {meals.map(([key, label, icon]) => (
                 <label className="meal-option" key={key}>
-                  <input type="checkbox" disabled={locked(selected)} checked={!!form[key]} onChange={event => setForm(current => ({ ...current, [key]: event.target.checked }))} />
+                  <input type="checkbox" disabled={isDateLocked(selected)} checked={!!form[key]} onChange={event => setForm(current => ({ ...current, [key]: event.target.checked }))} />
                   <Icon name={icon} size={25} />
                   <span>{label}</span>
                 </label>
@@ -787,16 +1064,16 @@ export default function App() {
             </div>
             <div className="day-status">
               <b>Day Status</b>
-              <span><i />{locked(selected) ? `Locked · deadline was ${lockDeadline(selected)}` : `Editable until ${lockDeadline(selected)}`}</span>
+              <span><i />{closedDays[keyOf(selected)] === 'closed' ? 'Mess Closed · contact the mess administrator' : isDateLocked(selected) ? `Locked · deadline was ${lockDeadline(selected, messRules)}` : `Editable until ${lockDeadline(selected, messRules)}`}</span>
             </div>
             {notice && <p className={`modal-notice ${notice === 'Updating...' ? 'is-pending' : ''}`} role="status">{notice}</p>}
             <div className="modal-actions">
               <button type="button" className="outline-button cancel-day-button" onClick={() => setSelected(null)}>Cancel</button>
-              <button type="button" className="outline-button update-day-button" disabled={locked(selected)} onClick={() => saveDay(meals.map(([key]) => form[key] ? key.toUpperCase() : '-').join(''))}>Update</button>
+              <button type="button" className="outline-button update-day-button" disabled={isDateLocked(selected)} onClick={() => saveDay(meals.map(([key]) => form[key] ? key.toUpperCase() : '-').join(''))}>Update</button>
             </div>
             <div className="quick-actions">
-              <button type="button" className="primary-button quick-full-day" disabled={locked(selected)} onClick={() => saveDay('BLTD')}>Full Day</button>
-              <button type="button" className="quick-mess-cut" disabled={locked(selected)} onClick={() => saveDay('----')}>Mess Cut</button>
+              <button type="button" className="primary-button quick-full-day" disabled={isDateLocked(selected)} onClick={() => saveDay('BLTD')}>Full Day</button>
+              <button type="button" className="quick-mess-cut" disabled={isDateLocked(selected)} onClick={() => saveDay('----')}>Mess Cut</button>
             </div>
           </section>
         </div>
@@ -892,7 +1169,7 @@ export default function App() {
                     const isStart = !!rangeStart && keyOf(rangeStart) === keyOf(date);
                     const isEnd = !!rangeEnd && keyOf(rangeEnd) === keyOf(date);
                     const isInRange = !!rangeStart && !!rangeEnd && date > rangeStart && date < rangeEnd;
-                    const unavailable = locked(date);
+                    const unavailable = isDateLocked(date);
                     return (
                       <button
                         type="button"
@@ -932,7 +1209,21 @@ export default function App() {
             {activePanel === 'profile' ? (
               <div className="profile-details">
                 <div className="profile-identity"><span className="avatar avatar-large">{student.name?.trim().charAt(0).toUpperCase() || 'S'}</span><div><b>{student.name}</b><span>{student.hostel}</span></div></div>
-                <dl><div><dt>Account number</dt><dd>{student.id}</dd></div><div><dt>Room</dt><dd>{student.room || '—'}</dd></div><div><dt>Academic year</dt><dd>{student.year || '—'}</dd></div><div><dt>Food preference</dt><dd>{orderedFoodPreference(student.foodPreference) || 'Not set'}</dd></div></dl>
+                <dl>{[
+                  ['Admission number', student.admissionNumber],
+                  ['Account number', student.id],
+                  ['Hostel', student.hostel],
+                  ['Room number', student.room],
+                  ['Email ID', student.email],
+                  ['Mobile number', student.mobileNumber],
+                  ['Year', student.year],
+                  ['Department', student.department],
+                  ['Guardian name', student.guardianName],
+                  ['Guardian relation', student.guardianRelation],
+                  ['Guardian mobile number', student.guardianMobileNumber],
+                  ['Blood group', student.bloodGroup],
+                  ['Food preference', orderedFoodPreference(student.foodPreference) || 'Not set'],
+                ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || '—'}</dd></div>)}</dl>
                 <button type="button" className="outline-button profile-edit" onClick={() => { setActivePanel(''); openFoodPreferences(); }}>Edit food preference</button>
               </div>
             ) : activePanel === 'support' ? (

@@ -4,6 +4,11 @@
 # working directory name when running `supabase init`.
 project_id = "DigiMessBook"
 
+[functions.super-admin]
+# This function validates super-admin access itself; anonymous student OTP reset actions
+# are also handled here, so the Edge gateway must allow requests without a user JWT.
+verify_jwt = false
+
 [api]
 enabled = true
 # Port to use for the API URL.
