@@ -19,7 +19,7 @@ begin
     select 1
     from public.hostels h
     join public.tenants t on t.id = h.tenant_id
-    where h.id = p_hostel and t.slug = 'mh-nssce-demo'
+    where h.id = p_hostel and t.slug = 'digimessbook'
   ) then
     raise exception 'Hostel not found' using errcode = '22023';
   end if;
@@ -37,7 +37,7 @@ begin
     on md.student_id = s.id and md.meal_date = p_date
   where s.hostel_id = p_hostel
     and s.tenant_id = h.tenant_id
-    and t.slug = 'mh-nssce-demo'
+    and t.slug = 'digimessbook'
   order by s.account_number;
 end;
 $$;

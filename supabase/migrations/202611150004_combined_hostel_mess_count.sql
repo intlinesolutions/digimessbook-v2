@@ -22,7 +22,7 @@ begin
     select 1
     from public.hostels h
     join public.tenants t on t.id = h.tenant_id
-    where h.id = p_hostel and t.slug = 'mh-nssce-demo'
+    where h.id = p_hostel and t.slug = 'digimessbook'
   ) then
     raise exception 'Hostel not found' using errcode = '22023';
   end if;
@@ -46,7 +46,7 @@ begin
     join public.tenants t on t.id = h.tenant_id
     left join public.meal_days md
       on md.student_id = s.id and md.meal_date = p_date
-    where t.slug = 'mh-nssce-demo'
+    where t.slug = 'digimessbook'
       and (
         (p_hostel is not null and s.hostel_id = p_hostel)
         or (p_hostel is null and h.name in ('MH 1', 'MH 2'))

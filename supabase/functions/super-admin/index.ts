@@ -8,9 +8,18 @@ const corsHeaders = {
 const appUrl = Deno.env.get('SUPABASE_URL')!;
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
-const defaultStudentPassword = Deno.env.get('DEFAULT_STUDENT_PASSWORD') || 'Mess@2026!';
+const defaultStudentPassword = Deno.env.get('DEFAULT_STUDENT_PASSWORD') || '';
+function requireDefaultStudentPassword() {
+  if (!defaultStudentPassword) {
+    throw Object.assign(
+      new Error('Student account setup is unavailable. Contact the system administrator.'),
+      { status: 503 },
+    );
+  }
+  return defaultStudentPassword;
+}
 const adminDb = createClient(appUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
-const emailFor = (account: string) => `${account.trim().toLowerCase()}@demo.digimessbook.local`;
+const emailFor = (account: string) => `${account.trim().toLowerCase()}@login.digimessbook.local`;
 const resetEmailProviderKey = Deno.env.get('RESEND_API_KEY') || '';
 const resetEmailFrom = Deno.env.get('PASSWORD_RESET_FROM_EMAIL') || '';
 const activityGroups: Record<string, string[]> = {
@@ -153,7 +162,7 @@ async function confirmStudentPasswordReset(body: Record<string, unknown>) {
     throw Object.assign(new Error('The verification code is invalid or expired.'), { status: 400 });
   }
 
-  const { error: resetError } = await adminDb.auth.admin.updateUserById(student.user_id, { password: defaultStudentPassword });
+  const { error: resetError } = await adminDb.auth.admin.updateUserById(student.user_id, { password: requireDefaultStudentPassword() });
   if (resetError) {
     console.error('Student password could not be reset after OTP verification', resetError);
     throw Object.assign(new Error('Password reset could not be completed. Contact the mess office.'), { status: 500 });
@@ -384,7 +393,7 @@ async function createStudent(input: Record<string, unknown>, tenantId: string) {
   if (!hostel) throw new Error('The selected hostel does not belong to this group.');
   const { data: created, error: authError } = await adminDb.auth.admin.createUser({
     email: emailFor(fields.account_number),
-    password: defaultStudentPassword,
+    password: requireDefaultStudentPassword(),
     email_confirm: true,
     user_metadata: { account_number: fields.account_number, full_name: fields.full_name },
   });
@@ -582,7 +591,7 @@ async function handle(request: Request) {
       try {
         const student = await getStudent(String(id), tenantId);
         accountNumber = student.account_number;
-        const { error } = await adminDb.auth.admin.updateUserById(student.user_id, { password: defaultStudentPassword });
+        const { error } = await adminDb.auth.admin.updateUserById(student.user_id, { password: requireDefaultStudentPassword() });
         if (error) throw error;
         await audit(actor, tenantId, 'student.password_reset', {
           account_number: student.account_number, student_name: student.full_name,

@@ -10,5 +10,5 @@ alter table public.students
 insert into public.hostels (tenant_id, name)
 select id, 'MH 3'
 from public.tenants
-where slug = 'mh-nssce-demo'
+where slug = 'digimessbook'
 on conflict (tenant_id, name) do nothing;

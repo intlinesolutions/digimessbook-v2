@@ -1,66 +1,24 @@
-# Digi Mess Book local development
+# DigiMessBook production
 
-The React frontend is in `client/`. Supabase local configuration, SQL schema, and demo data are in `supabase/`. The original `index.html` remains as a reference copy.
+The React frontend is in client/. Supabase schema, Edge Functions, and production-safe seed data are in supabase/.
 
-## Start the local backend
+## Production data
 
-From the repository root, run:
+The migrations and seed create the DigiMessBook tenant and the three mess halls: MH 1, MH 2, and MH 3. They do not create Auth users, students, or meal-day records.
 
-```powershell
-npx supabase start
-```
+## Frontend
 
-The first run downloads the Supabase Docker images. When it finishes, use `npx supabase status` to get the local API URL and anon key. The default local API URL is `http://127.0.0.1:54321`.
+Configure these Vercel Production environment variables:
 
-Copy `client/.env.example` to `client/.env.local` and put the API URL and anon key from `supabase status` in that file. These are local public client values; never put a service-role key in the browser app.
+- VITE_SUPABASE_URL
+- VITE_SUPABASE_ANON_KEY (use the Supabase publishable key)
 
-## Start the frontend
+The Vercel project root is client; the build command is npm run build, with output in dist.
 
-In a second PowerShell window:
+## Supabase deployment
 
-```powershell
-cd D:\DEV\DigiMessBook\client
-npm install
-npm run dev
-```
+Apply the migrations to the intended project and deploy the super-admin Edge Function. The function uses Supabase's built-in SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY; never expose the service-role key to the browser.
 
-Open the Vite URL shown in the terminal, normally `http://127.0.0.1:5173`.
+Before using student creation or password-reset actions, configure the Edge Function secrets DEFAULT_STUDENT_PASSWORD, RESEND_API_KEY, and PASSWORD_RESET_FROM_EMAIL. The app fails closed if the default password is not configured.
 
-## Demo students
-
-The local seed creates these accounts. All use password `Mess@2026!`.
-
-| Account number | Demo name | Room |
-|---|---|---|
-| `24B000` | Demo Student One | 101 |
-| `24B001` | Demo Student Two | 102 |
-| `24B002` | Demo Student Three | 103 |
-
-`npx supabase db reset` reapplies migrations and reseeds the local database, replacing local test changes.
-`npx supabase stop` stops the local stack; it preserves its data unless `--no-backup` is specified.
-
-## Super-admin dashboard
-
-The admin dashboard is available at `/super-admin`. Its workspace uses a Supabase Edge Function so administrative operations never need a service-role key in the browser. The SQL migration adds departments, lock settings, mess-calendar dates, student notifications, and an admin audit log.
-
-Apply migrations and deploy the function to the intended Supabase project:
-
-```powershell
-npx supabase db push
-npx supabase functions deploy super-admin
-npx supabase secrets set DEFAULT_STUDENT_PASSWORD="choose-a-strong-default"
-```
-
-The Edge Function uses Supabase's `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` environment values. These are provided to deployed functions by Supabase; do not add the service-role key to `client/.env.local` or any frontend configuration. For local development, start the local Supabase stack, put `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `DEFAULT_STUDENT_PASSWORD` in the ignored file `supabase/.env.local`, then run:
-
-```powershell
-npx supabase functions serve super-admin --env-file supabase/.env.local
-```
-
-Create a dedicated administrator in Supabase Auth and set its **app metadata** to `{"role":"super_admin"}`. The dashboard validates this server-side for every request. User metadata is not used for authorization. Sign in to `/super-admin` with that Auth user's email and password. Newly created student accounts and password resets use `DEFAULT_STUDENT_PASSWORD`; when it is unset, the local demo default `Mess@2026!` is used.
-
-Student forgot-password emails use Resend because student login accounts use internal email aliases. Configure `RESEND_API_KEY` and `PASSWORD_RESET_FROM_EMAIL` as server-side Supabase Function secrets, and verify the sender domain with Resend. For local Edge Function development, add those values to the ignored `supabase/.env.local` file as well. The reset code goes to the student's saved `email` profile field; requests are limited to one email per student per minute.
-
-Notifications are stored for each selected student, appear in the student app's notification panel, and are marked read when opened. Admin changes are written to the audit log. The month cleanup action removes meal-day entries for the selected month across the selected tenant and keeps student accounts and the audit log.
-
-The local demo users and their data remain local unless you apply migrations or seed data to another project deliberately.
+Create a dedicated administrator in Supabase Auth and set its app metadata to {"role":"super_admin"}. The dashboard checks this role server-side.

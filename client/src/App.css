@@ -163,8 +163,6 @@ svg { flex: 0 0 auto; }
 .login-success { margin: 14px 0 0; color: #176c23; font-size: 13px; line-height: 1.5; }
 .login-submit { width: 100%; min-height: 58px; margin-top: 25px; border-radius: 15px; font-size: 16px; }
 .login-help { margin: 20px 0; color: #45554b; font-size: 14px; text-align: center; }
-.demo-note { display: grid; gap: 3px; padding: 13px 15px; border: 1px solid #e4eee0; border-radius: 13px; background: #f7fbf4; color: #657266; font-size: 12px; }
-.demo-note b { margin-bottom: 2px; color: var(--green-900); font-size: 12px; }
 
 /* Signed-in dashboard and navigation */
 .app-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 100svh; background: #f7f9f6; }
@@ -517,7 +515,6 @@ svg { flex: 0 0 auto; }
   .login-input-row { min-height: 55px; }
   .login-input-row input { height: 51px; font-size: 14px; }
   .login-submit { min-height: 55px; margin-top: 21px; }
-  .demo-note { margin-top: 16px; }
 }
 
 @media (max-width: 370px) {

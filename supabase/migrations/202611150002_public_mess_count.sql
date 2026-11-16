@@ -8,7 +8,7 @@ as $$
   select h.id, h.name
   from public.hostels h
   join public.tenants t on t.id = h.tenant_id
-  where t.slug = 'mh-nssce-demo'
+  where t.slug = 'digimessbook'
   order by h.name;
 $$;
 
@@ -36,7 +36,7 @@ begin
     select 1
     from public.hostels h
     join public.tenants t on t.id = h.tenant_id
-    where h.id = p_hostel and t.slug = 'mh-nssce-demo'
+    where h.id = p_hostel and t.slug = 'digimessbook'
   ) then
     raise exception 'Hostel not found' using errcode = '22023';
   end if;

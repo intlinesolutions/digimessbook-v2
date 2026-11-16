@@ -267,7 +267,7 @@ export default function App() {
     setBusy(true);
     try {
       const { data: auth, error: authError } = await supabase.auth.signInWithPassword({
-        email: `${acc.trim().toLowerCase()}@demo.digimessbook.local`,
+        email: `${acc.trim().toLowerCase()}@login.digimessbook.local`,
         password,
       });
       if (authError) throw authError;
@@ -586,7 +586,7 @@ export default function App() {
 
     setPasswordBusy(true);
     try {
-      const email = `${student.id.trim().toLowerCase()}@demo.digimessbook.local`;
+      const email = `${student.id.trim().toLowerCase()}@login.digimessbook.local`;
       const { error: verifyError } = await supabase.auth.signInWithPassword({
         email,
         password: currentPassword,
@@ -798,11 +798,6 @@ export default function App() {
                       Get Help
                     </button>
                   </p>
-                  <div className="demo-note">
-                    <b>Local demo</b>
-                    <span>Accounts: 24B000, 24B001, 24B002</span>
-                    <span>Password: Mess@2026!</span>
-                  </div>
                 </>
               )}
             </form>
