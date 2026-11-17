@@ -420,12 +420,6 @@ async function getStudent(studentId: string, tenantId: string) {
   return data;
 }
 
-async function getAuthAccountCreatedAt(userId: string) {
-  const { data, error } = await adminDb.auth.admin.getUserById(userId);
-  if (error) throw error;
-  return data.user?.created_at || null;
-}
-
 async function getStudentForPasswordReset(studentId: string, tenantId: string) {
   const { data, error } = await adminDb.from('students')
     .select('id,user_id,account_number,admission_number,full_name,tenant_id')
@@ -516,7 +510,6 @@ async function handle(request: Request) {
   if (action === 'student-calendar') {
     await tenantExists(tenantId);
     const student = await getStudent(String(body.studentId || ''), tenantId);
-    const createdAt = await getAuthAccountCreatedAt(student.user_id);
     const month = String(body.month || '');
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw Object.assign(new Error('Choose a valid calendar month.'), { status: 400 });
     const start = `${month}-01`;
@@ -536,7 +529,7 @@ async function handle(request: Request) {
         .gte('calendar_date', start).lte('calendar_date', end),
     ]);
     if (closedDays.error) throw closedDays.error;
-    return reply({ student: { ...student, created_at: createdAt }, meals, closedDays: closedDays.data || [] });
+    return reply({ student, meals, closedDays: closedDays.data || [] });
   }
   if (action === 'save-student-meal') {
     await tenantExists(tenantId);
@@ -715,13 +708,12 @@ async function handle(request: Request) {
     endDate.setUTCMonth(endDate.getUTCMonth() + 1);
     endDate.setUTCDate(0);
     const end = endDate.toISOString().slice(0, 10);
-    const ids = await fetchAllRows((from, to) => adminDb.from('students').select('id').eq('tenant_id', tenantId).order('id').range(from, to));
-    const studentIds = ids.map(row => row.id);
-    for (let index = 0; index < studentIds.length; index += 500) {
-      const { error } = await adminDb.from('meal_days').delete().in('student_id', studentIds.slice(index, index + 500)).gte('meal_date', start).lte('meal_date', end);
-      if (error) throw error;
-    }
-    await audit(actor, tenantId, 'month.deleted', { month, start, end, students: studentIds.length });
+    const { data: affectedStudents, error: deleteError } = await adminDb.rpc('admin_delete_month_meal_data', {
+      p_tenant_id: tenantId,
+      p_month_start: start,
+    });
+    if (deleteError) throw deleteError;
+    await audit(actor, tenantId, 'month.deleted', { month, start, end, students: Number(affectedStudents || 0) });
     return reply({ ok: true, month });
   }
   if (action === 'send-notification') {

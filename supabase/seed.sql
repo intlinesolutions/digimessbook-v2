@@ -47,4 +47,4 @@ select s.id, d::date,
   end
 from public.students s cross join generate_series(date '2026-11-01', date '2026-11-30', interval '1 day') d
 where s.account_number in ('24B000','24B001','24B002','24B003','24B004')
-on conflict (student_id, meal_date) do nothing;
+on conflict (student_id, meal_date) do update set meal_code = excluded.meal_code;

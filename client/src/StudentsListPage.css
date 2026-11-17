@@ -50,6 +50,7 @@
 .students-list-status-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; vertical-align: middle; }
 .students-list-status-dot.is-cut { background: #d83c3c; }
 .students-list-status-dot.is-in-mess { background: #36a45b; }
+.students-list-status-dot.is-no-record { background: #aeb8b0; }
 .students-list-empty { color: #768279; font-size: 14px; padding: 28px 20px; text-align: center; }
 .students-list-caption { border-top: 1px solid #edf0ed; color: #78847c; font-size: 12px; padding: 12px 18px; }
 

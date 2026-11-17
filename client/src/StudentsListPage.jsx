@@ -180,10 +180,10 @@ export default function StudentsListPage() {
                         <td>{student.full_name}</td>
                         <td>
                           <span
-                            className={`students-list-status-dot ${student.is_mess_cut ? 'is-cut' : 'is-in-mess'}`}
+                            className={`students-list-status-dot ${student.is_mess_cut === true ? 'is-cut' : student.is_mess_cut === false ? 'is-in-mess' : 'is-no-record'}`}
                             role="img"
-                            aria-label={student.is_mess_cut ? 'Mess cut' : 'In mess'}
-                            title={student.is_mess_cut ? 'Mess cut' : 'In mess'}
+                            aria-label={student.is_mess_cut === true ? 'Mess cut' : student.is_mess_cut === false ? 'In mess' : 'No meal record'}
+                            title={student.is_mess_cut === true ? 'Mess cut' : student.is_mess_cut === false ? 'In mess' : 'No meal record'}
                           />
                         </td>
                       </tr>

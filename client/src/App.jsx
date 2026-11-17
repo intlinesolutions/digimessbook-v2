@@ -21,14 +21,6 @@ function shiftDateKey(dateKey, amount) {
   date.setUTCDate(date.getUTCDate() + amount);
   return date.toISOString().slice(0, 10);
 }
-function accountStartDateKey(createdAt) {
-  if (!createdAt) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(String(createdAt))) return String(createdAt);
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {
-    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date(createdAt)).map(({ type, value }) => [type, value]));
-  return parts.year && parts.month && parts.day ? `${parts.year}-${parts.month}-${parts.day}` : '';
-}
 function getCurrentMonthKey() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {
     timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit',
@@ -54,11 +46,10 @@ function monthLabel(monthKey) {
   return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })
     .format(new Date(Date.UTC(year, month - 1, 1)));
 }
-function mealCodeFor(days, date, createdAt) {
+function mealCodeFor(days, date) {
   const dateKey = keyOf(date);
   if (Object.prototype.hasOwnProperty.call(days || {}, dateKey)) return String(days[dateKey] || '----').trim();
-  const accountStart = accountStartDateKey(createdAt);
-  return accountStart && dateKey >= accountStart ? 'BLTD' : null;
+  return null;
 }
 const locked = (d, rules, closedDays) => {
   if (closedDays?.[keyOf(d)] === 'closed') return true;
@@ -99,17 +90,17 @@ const isToday = d => {
     && d.getDate() === today.getDate();
 };
 
-function billable(days, dates, createdAt) {
+function billable(days, dates) {
   let n = 0;
   for (const date of dates) {
-    const code = mealCodeFor(days, date, createdAt);
+    const code = mealCodeFor(days, date);
     if (code === null) continue;
     if (code !== '----') {
       n++;
       continue;
     }
-    const previousCut = mealCodeFor(days, shiftDate(date, -1), createdAt) === '----';
-    const nextCut = mealCodeFor(days, shiftDate(date, 1), createdAt) === '----';
+    const previousCut = mealCodeFor(days, shiftDate(date, -1)) === '----';
+    const nextCut = mealCodeFor(days, shiftDate(date, 1)) === '----';
     if (!previousCut && !nextCut) n++;
   }
   return n;
@@ -244,7 +235,7 @@ export default function App() {
   const visibleDays = loadedMonth === selectedMonth ? (student?.days || {}) : {};
   const summaryMonthIsCurrent = selectedMonth === currentMonth;
   const isDateLocked = date => locked(date, messRules, closedDays);
-  const total = useMemo(() => student && loadedMonth === selectedMonth ? billable(student.days, dates, student.createdAt) : null, [student, loadedMonth, selectedMonth, dates]);
+  const total = useMemo(() => student && loadedMonth === selectedMonth ? billable(student.days, dates) : null, [student, loadedMonth, selectedMonth, dates]);
   const selectedRangeDates = rangeStart && rangeEnd
     ? dates.filter(date => date >= rangeStart && date <= rangeEnd)
     : [];
@@ -428,7 +419,6 @@ export default function App() {
       setStudent({
         id: profile.account_number,
         name: profile.full_name,
-        createdAt: auth.user.created_at,
         admissionNumber: profile.admission_number,
         room: profile.room,
         year: profile.academic_year,
@@ -547,7 +537,7 @@ export default function App() {
   function openDay(date) {
     if (monthLoading || loadedMonth !== selectedMonth) return;
     setSelected(date);
-    const value = mealCodeFor(student.days, date, student.createdAt) || '----';
+    const value = mealCodeFor(student.days, date) || '----';
     setForm(Object.fromEntries(meals.map(([key]) => [
       key,
       value[['b', 'l', 't', 'd'].indexOf(key)] === key.toUpperCase(),
@@ -1137,10 +1127,10 @@ export default function App() {
               <div className="calendar-days">
                 {Array(dates[0].getDay()).fill(0).map((_, index) => <span className="calendar-empty" key={`empty-${index}`} />)}
                 {dates.map(date => {
-                  const v = mealCodeFor(visibleDays, date, student.createdAt);
+                  const v = mealCodeFor(visibleDays, date);
                   const cut = v === '----';
-                  const prevCut = mealCodeFor(visibleDays, shiftDate(date, -1), student.createdAt) === '----';
-                  const nextCut = mealCodeFor(visibleDays, shiftDate(date, 1), student.createdAt) === '----';
+                  const prevCut = mealCodeFor(visibleDays, shiftDate(date, -1)) === '----';
+                  const nextCut = mealCodeFor(visibleDays, shiftDate(date, 1)) === '----';
                   const adj = cut && (prevCut || nextCut);
                   const dotColor = v === null ? '#cbd5ce' : cut ? (adj ? '#d22' : '#f1ca28') : '#4caf50';
                   return (
