@@ -48,19 +48,21 @@ Apply migrations and deploy the function to the intended Supabase project:
 ```powershell
 npx supabase db push
 npx supabase functions deploy super-admin
-npx supabase secrets set DEFAULT_STUDENT_PASSWORD="choose-a-strong-default"
+npx supabase secrets set RESEND_API_KEY="your-resend-api-key" PASSWORD_RESET_FROM_EMAIL="DigiMessBook <no-reply@your-verified-domain>" PASSWORD_RESET_REDIRECT_URL="https://your-app.example/reset-password"
 ```
 
-The Edge Function uses Supabase's `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` environment values. These are provided to deployed functions by Supabase; do not add the service-role key to `client/.env.local` or any frontend configuration. For local development, start the local Supabase stack, put `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `DEFAULT_STUDENT_PASSWORD` in the ignored file `supabase/.env.local`, then run:
+The Edge Function uses Supabase's `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` environment values. These are provided to deployed functions by Supabase; do not add the service-role key to `client/.env.local` or any frontend configuration. For local development, start the local Supabase stack, put `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `PASSWORD_RESET_FROM_EMAIL`, and `PASSWORD_RESET_REDIRECT_URL` in the ignored file `supabase/.env.local`, then run:
 
 ```powershell
 npx supabase functions serve super-admin --env-file supabase/.env.local
 ```
 
-Create a dedicated administrator in Supabase Auth and set its **app metadata** to `{"role":"super_admin"}`. The dashboard validates this server-side for every request. User metadata is not used for authorization. Sign in to `/super-admin` with that Auth user's email and password. Newly created student accounts and password resets use `DEFAULT_STUDENT_PASSWORD`; when it is unset, the local demo default `Mess@2026!` is used.
+Create a dedicated administrator in Supabase Auth and set its **app metadata** to `{"role":"super_admin"}`. The dashboard validates this server-side for every request. User metadata is not used for authorization. Sign in to `/super-admin` with that Auth user's email and password. Newly created student accounts and super-admin password resets use the student's admission number as the password. When no admission number is on file, the fallback is `Mess@2026!`.
 
-Student forgot-password emails use Resend because student login accounts use internal email aliases. Configure `RESEND_API_KEY` and `PASSWORD_RESET_FROM_EMAIL` as server-side Supabase Function secrets, and verify the sender domain with Resend. For local Edge Function development, add those values to the ignored `supabase/.env.local` file as well. The reset code goes to the student's saved `email` profile field; requests are limited to one email per student per minute.
+Forgot-password recovery emails use Resend because student login accounts use internal email aliases. They send a single-use link to the student's saved `students.email` address; the student chooses a new password on `/reset-password`. Super-admin password resets set the password directly and do not send an email. Verify the sender domain with Resend, set `PASSWORD_RESET_REDIRECT_URL` to the deployed app's `/reset-password` URL, and add that exact URL to the Supabase Auth redirect allow list. For local Edge Function development, set `PASSWORD_RESET_REDIRECT_URL=http://127.0.0.1:5173/reset-password` in the ignored `supabase/.env.local` file. Forgot-password requests are limited to one email per student per minute. Other student-facing email sends should use the saved `students.email` address as well.
 
 Notifications are stored for each selected student, appear in the student app's notification panel, and are marked read when opened. Admin changes are written to the audit log. The month cleanup action removes meal-day entries for the selected month across the selected tenant and keeps student accounts and the audit log.
+
+The student dashboard month picker shows the previous, current, and next month, with the current month selected at login. A monthly Supabase Cron job removes `meal_days` and `mess_calendar` rows older than the previous month, keeping the previous, current, and next month available. Student profiles and audit history are retained.
 
 The local demo users and their data remain local unless you apply migrations or seed data to another project deliberately.

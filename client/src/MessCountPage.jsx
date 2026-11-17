@@ -2,15 +2,33 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from './supabase';
 import './MessCountPage.css';
 
-const columns = [
-  ['meal_count', 'Count'],
-  ['veg', 'Veg'],
+const BOTH_HOSTELS = 'both-hostels';
+const preferences = [
   ['chicken', 'Chicken'],
   ['fish', 'Fish'],
   ['egg', 'Egg'],
   ['beef', 'Beef'],
+  ['none', 'None'],
 ];
-const BOTH_HOSTELS = 'both-hostels';
+
+function getVisibleColumns(preference) {
+  if (preference === 'none') return [{ key: 'meal_count', label: 'Total' }];
+
+  const label = preferences.find(([key]) => key === preference)?.[1] || 'Chicken';
+  return [
+    { key: 'meal_count', label: 'Total' },
+    { key: preference, label },
+    { key: 'veg', label: 'Veg-only' },
+    { key: 'not_preferred', label: `No-${label}` },
+  ];
+}
+
+function getColumnValue(row, column, preference) {
+  if (column.key === 'not_preferred') {
+    return Math.max(0, Number(row.meal_count || 0) - Number(row[preference] || 0) - Number(row.veg || 0));
+  }
+  return row[column.key] ?? 0;
+}
 
 function getTomorrowInIndia() {
   const parts = Object.fromEntries(
@@ -63,6 +81,7 @@ function createSnapshotBlob(summary, hostelName) {
   const rowHeight = 58;
   const requestedAtHeight = 48;
   const footerHeight = 48;
+  const visibleColumns = getVisibleColumns(summary.preference);
   const tableHeight = headerHeight + rowHeight * summary.rows.length + requestedAtHeight + footerHeight;
   const height = tableTop + tableHeight;
   const padding = 22;
@@ -79,10 +98,11 @@ function createSnapshotBlob(summary, hostelName) {
   context.lineWidth = 1;
   drawRoundedRect(context, 0.5, 0.5, width - 1, topCardHeight - 1, 18, '#ffffff', '#e2e9e3');
   const fieldGap = 20;
-  const fieldWidth = (width - padding * 2 - fieldGap) / 2;
+  const fieldWidth = (width - padding * 2 - fieldGap * 2) / 3;
   const fields = [
     { label: 'HOSTEL', value: hostelName },
     { label: 'DATE', value: new Date(`${summary.date}T00:00:00Z`).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }) },
+    { label: 'PREFERENCE', value: preferences.find(([key]) => key === summary.preference)?.[1] || 'Chicken' },
   ];
   fields.forEach((field, index) => {
     const x = padding + index * (fieldWidth + fieldGap);
@@ -105,8 +125,8 @@ function createSnapshotBlob(summary, hostelName) {
   context.fillStyle = '#f3f7f3';
   context.fillRect(1, tableTop + 1, width - 2, headerHeight);
 
-  const labels = ['Meal', 'Count', 'Veg', 'Chicken', 'Fish', 'Egg', 'Beef'];
-  const weights = [0.23, 0.13, 0.11, 0.16, 0.11, 0.12, 0.14];
+  const labels = ['Meal', ...visibleColumns.map(column => column.label)];
+  const weights = [0.28, ...visibleColumns.map(() => 0.72 / visibleColumns.length)];
   const contentWidth = width - padding * 2;
   const columnWidths = weights.map(weight => contentWidth * weight);
   const columnStarts = [];
@@ -145,10 +165,10 @@ function createSnapshotBlob(summary, hostelName) {
 
     context.fillStyle = '#27362b';
     context.font = '16px Arial, sans-serif';
-    columns.forEach(([key], columnIndex) => {
+    visibleColumns.forEach((column, columnIndex) => {
       const index = columnIndex + 1;
       context.textAlign = 'center';
-      context.fillText(String(row[key] ?? 0), columnStarts[index] + columnWidths[index] / 2, rowY + rowHeight / 2);
+      context.fillText(String(getColumnValue(row, column, summary.preference)), columnStarts[index] + columnWidths[index] / 2, rowY + rowHeight / 2);
     });
   });
 
@@ -198,6 +218,7 @@ export default function MessCountPage() {
   const [hostels, setHostels] = useState([]);
   const [hostelId, setHostelId] = useState('');
   const [date, setDate] = useState(getTomorrowInIndia);
+  const [preference, setPreference] = useState('chicken');
   const [summary, setSummary] = useState(null);
   const [loadingHostels, setLoadingHostels] = useState(true);
   const [loadingSummary, setLoadingSummary] = useState(false);
@@ -247,6 +268,7 @@ export default function MessCountPage() {
     const requestId = ++summaryRequest.current;
     const requestedHostelId = hostelId;
     const requestedDate = date;
+    const requestedPreference = preference;
     const requestedAt = new Date().toISOString();
 
     setError('');
@@ -265,6 +287,7 @@ export default function MessCountPage() {
         setSummary({
           hostelId: requestedHostelId,
           date: requestedDate,
+          preference: requestedPreference,
           requestedAt,
           rows: data || [],
         });
@@ -283,6 +306,8 @@ export default function MessCountPage() {
       ? 'MH 1 & 2'
       : hostels.find(hostel => hostel.id === snapshot.hostelId)?.name || 'Hostel';
   }
+
+  const visibleColumns = summary ? getVisibleColumns(summary.preference) : [];
 
   async function downloadSnapshot() {
     if (!summary || snapshotBusy) return;
@@ -360,6 +385,17 @@ export default function MessCountPage() {
               required
             />
           </label>
+          <label>
+            <span>Preference</span>
+            <select
+              value={preference}
+              onChange={event => { summaryRequest.current += 1; setPreference(event.target.value); setSummary(null); setError(''); }}
+              disabled={loadingSummary}
+              required
+            >
+              {preferences.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+            </select>
+          </label>
           <button className="mess-count-submit" type="submit" disabled={loadingSummary || loadingHostels || hostels.length === 0}>
             {loadingSummary ? 'Getting Summary…' : 'Get Summary'}
           </button>
@@ -374,13 +410,13 @@ export default function MessCountPage() {
           <div className="mess-count-table-wrap">
             <table className="mess-count-table">
               <thead>
-                <tr><th scope="col">Meal</th>{columns.map(([, label]) => <th scope="col" key={label}>{label}</th>)}</tr>
+                <tr><th scope="col">Meal</th>{visibleColumns.map(column => <th scope="col" key={column.key}>{column.label}</th>)}</tr>
               </thead>
               <tbody>
                 {summary.rows.map(row => (
                   <tr key={row.meal}>
                     <th scope="row">{row.meal}</th>
-                    {columns.map(([key]) => <td key={key}>{row[key] ?? 0}</td>)}
+                    {visibleColumns.map(column => <td key={column.key}>{getColumnValue(row, column, summary.preference)}</td>)}
                   </tr>
                 ))}
               </tbody>

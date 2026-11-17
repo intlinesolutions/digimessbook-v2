@@ -7,12 +7,12 @@ const corsHeaders = {
 };
 const appUrl = Deno.env.get('SUPABASE_URL')!;
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
-const defaultStudentPassword = Deno.env.get('DEFAULT_STUDENT_PASSWORD') || 'Mess@2026!';
+const defaultStudentPassword = 'Mess@2026!';
 const adminDb = createClient(appUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } });
 const emailFor = (account: string) => `${account.trim().toLowerCase()}@demo.digimessbook.local`;
 const resetEmailProviderKey = Deno.env.get('RESEND_API_KEY') || '';
 const resetEmailFrom = Deno.env.get('PASSWORD_RESET_FROM_EMAIL') || '';
+const passwordResetRedirectUrl = Deno.env.get('PASSWORD_RESET_REDIRECT_URL') || '';
 const activityGroups: Record<string, string[]> = {
   student_management: ['student.created', 'student.updated', 'student.deleted', 'student.password_reset', 'students.bulk_imported'],
   day_status: ['day.status_changed', 'day.mess_closed', 'day.opened'],
@@ -52,19 +52,18 @@ async function requireSuperAdmin(request: Request) {
   return user;
 }
 
-function normalizeResetIdentity(body: Record<string, unknown>) {
-  return {
-    accountNumber: String(body.accountNumber || '').trim().toUpperCase(),
-    admissionNumber: String(body.admissionNumber || '').trim().toUpperCase(),
+function escapeHtml(value: string) {
+  const replacements: Record<string, string> = {
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   };
+  return value.replace(/[&<>"']/g, character => replacements[character] || character);
 }
 
-async function findResetStudent(accountNumber: string, admissionNumber: string) {
-  if (!/^[A-Z0-9._-]{1,40}$/.test(accountNumber) || !/^[A-Z0-9._/-]{1,40}$/.test(admissionNumber)) return null;
+async function findResetStudent(accountNumber: string) {
+  if (!/^[A-Z0-9._-]{1,40}$/.test(accountNumber)) return null;
   const { data, error } = await adminDb.from('students')
-    .select('id,user_id,account_number,admission_number,email')
+    .select('id,user_id,account_number,email')
     .eq('account_number', accountNumber)
-    .eq('admission_number', admissionNumber)
     .maybeSingle();
   if (error) throw error;
   return data;
@@ -89,77 +88,60 @@ async function claimPasswordResetEmail(studentId: string) {
   return !!data;
 }
 
-async function sendStudentPasswordReset(body: Record<string, unknown>) {
-  if (!resetEmailProviderKey || !resetEmailFrom || !anonKey) {
-    return reply({ error: 'Password reset email is temporarily unavailable. Please contact the mess office.' }, 503);
+async function emailStudentRecoveryLink(student: any) {
+  if (!resetEmailProviderKey || !resetEmailFrom || !passwordResetRedirectUrl) {
+    throw new Error('Password reset email is not configured.');
   }
-  let studentId: string | null = null;
+  const destinationEmail = String(student?.email || '').trim();
+  if (!destinationEmail || !student?.user_id || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destinationEmail)) return 'missing_email';
+
+  const claimed = await claimPasswordResetEmail(student.id);
+  if (!claimed) return 'rate_limited';
+
   try {
-    const { accountNumber, admissionNumber } = normalizeResetIdentity(body);
-    const student = await findResetStudent(accountNumber, admissionNumber);
-    if (!student?.email || !student.user_id || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(student.email)) return reply({ ok: true });
-    studentId = student.id;
-
-    const claimed = await claimPasswordResetEmail(student.id);
-    if (!claimed) return reply({ ok: true });
-
-    const { data, error } = await adminDb.auth.admin.generateLink({ type: 'recovery', email: emailFor(student.account_number) });
-    const otp = String(data?.properties?.email_otp || '');
-    if (error || !/^\d{6}$/.test(otp)) {
-      await adminDb.from('student_password_reset_throttle').delete().eq('student_id', student.id);
-      throw error || new Error('Unable to generate the password reset code.');
+    const { data, error } = await adminDb.auth.admin.generateLink({
+      type: 'recovery',
+      email: emailFor(student.account_number),
+      options: { redirectTo: passwordResetRedirectUrl },
+    });
+    const actionLink = String(data?.properties?.action_link || '');
+    if (error || (!/^https:\/\//i.test(actionLink) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(actionLink))) {
+      throw error || new Error('Unable to generate the password reset link.');
     }
 
+    const safeActionLink = escapeHtml(actionLink);
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${resetEmailProviderKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         from: resetEmailFrom,
-        to: [student.email],
-        subject: 'Your DigiMessBook password reset code',
-        text: `Your DigiMessBook password reset code is ${otp}. It expires in 1 hour. If you did not request this, ignore this email.`,
-        html: `<p>Your DigiMessBook password reset code is:</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${otp}</p><p>This code expires in 1 hour. If you did not request this, ignore this email.</p>`,
+        to: [destinationEmail],
+        subject: 'Reset your DigiMessBook password',
+        text: `Use this one-time link to choose a new DigiMessBook password: ${actionLink}\n\nIf you did not request this, you can ignore this email.`,
+        html: `<p>We received a request to reset your DigiMessBook password.</p><p><a href="${safeActionLink}">Choose a new password</a></p><p>If you did not request this, you can ignore this email.</p>`,
       }),
     });
     if (!response.ok) {
       console.error('Password reset email delivery failed with status', response.status);
-      throw Object.assign(new Error('Unable to send the password reset code right now.'), { status: 502 });
+      throw Object.assign(new Error('Unable to send the password reset link right now.'), { status: 502 });
     }
-    return reply({ ok: true });
+    return 'sent';
   } catch (resetEmailError) {
-    if (studentId) await adminDb.from('student_password_reset_throttle').delete().eq('student_id', studentId);
-    console.error('Student password reset request could not be completed', resetEmailError);
-    return reply({ ok: true });
+    await adminDb.from('student_password_reset_throttle').delete().eq('student_id', student.id);
+    throw resetEmailError;
   }
 }
 
-async function confirmStudentPasswordReset(body: Record<string, unknown>) {
-  const { accountNumber, admissionNumber } = normalizeResetIdentity(body);
-  const otp = String(body.otp || '').trim();
-  if (!anonKey) throw Object.assign(new Error('Password reset is temporarily unavailable. Please contact the mess office.'), { status: 503 });
-  if (!/^\d{6}$/.test(otp)) throw Object.assign(new Error('The verification code is invalid or expired.'), { status: 400 });
-  let student: any;
+async function sendStudentPasswordReset(body: Record<string, unknown>) {
   try {
-    student = await findResetStudent(accountNumber, admissionNumber);
-  } catch (lookupError) {
-    console.error('Student password reset identity lookup failed', lookupError);
-    throw Object.assign(new Error('The verification code is invalid or expired.'), { status: 400 });
+    const accountNumber = String(body.accountNumber || '').trim().toUpperCase();
+    const student = await findResetStudent(accountNumber);
+    if (student) await emailStudentRecoveryLink(student);
+    return reply({ ok: true });
+  } catch (resetEmailError) {
+    console.error('Student password reset request could not be completed', resetEmailError);
+    return reply({ ok: true });
   }
-  if (!student?.user_id) throw Object.assign(new Error('The verification code is invalid or expired.'), { status: 400 });
-
-  const verifier = createClient(appUrl, anonKey, { auth: { autoRefreshToken: false, persistSession: false } });
-  const { data, error } = await verifier.auth.verifyOtp({ email: emailFor(student.account_number), token: otp, type: 'recovery' });
-  if (error || data.user?.id !== student.user_id) {
-    throw Object.assign(new Error('The verification code is invalid or expired.'), { status: 400 });
-  }
-
-  const { error: resetError } = await adminDb.auth.admin.updateUserById(student.user_id, { password: defaultStudentPassword });
-  if (resetError) {
-    console.error('Student password could not be reset after OTP verification', resetError);
-    throw Object.assign(new Error('Password reset could not be completed. Contact the mess office.'), { status: 500 });
-  }
-  await adminDb.from('student_password_reset_throttle').delete().eq('student_id', student.id);
-  return reply({ ok: true });
 }
 
 async function tenantExists(tenantId: string) {
@@ -384,7 +366,7 @@ async function createStudent(input: Record<string, unknown>, tenantId: string) {
   if (!hostel) throw new Error('The selected hostel does not belong to this group.');
   const { data: created, error: authError } = await adminDb.auth.admin.createUser({
     email: emailFor(fields.account_number),
-    password: defaultStudentPassword,
+    password: String(fields.admission_number || '').trim() || defaultStudentPassword,
     email_confirm: true,
     user_metadata: { account_number: fields.account_number, full_name: fields.full_name },
   });
@@ -438,6 +420,21 @@ async function getStudent(studentId: string, tenantId: string) {
   return data;
 }
 
+async function getAuthAccountCreatedAt(userId: string) {
+  const { data, error } = await adminDb.auth.admin.getUserById(userId);
+  if (error) throw error;
+  return data.user?.created_at || null;
+}
+
+async function getStudentForPasswordReset(studentId: string, tenantId: string) {
+  const { data, error } = await adminDb.from('students')
+    .select('id,user_id,account_number,admission_number,full_name,tenant_id')
+    .eq('id', studentId).eq('tenant_id', tenantId).maybeSingle();
+  if (error) throw error;
+  if (!data) throw Object.assign(new Error('Student not found in the selected group.'), { status: 404 });
+  return data;
+}
+
 async function recordLogin(request: Request, tenantId: string) {
   const token = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
   if (!token) throw Object.assign(new Error('Sign in to continue.'), { status: 401 });
@@ -479,7 +476,6 @@ async function handle(request: Request) {
   const tenantId = String(body.tenantId || '');
   if (action === 'record-login') return reply(await recordLogin(request, tenantId));
   if (action === 'request-student-password-reset') return sendStudentPasswordReset(body);
-  if (action === 'confirm-student-password-reset') return confirmStudentPasswordReset(body);
   const actor = await requireSuperAdmin(request);
 
   if (action === 'tenants') {
@@ -520,20 +516,27 @@ async function handle(request: Request) {
   if (action === 'student-calendar') {
     await tenantExists(tenantId);
     const student = await getStudent(String(body.studentId || ''), tenantId);
+    const createdAt = await getAuthAccountCreatedAt(student.user_id);
     const month = String(body.month || '');
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw Object.assign(new Error('Choose a valid calendar month.'), { status: 400 });
     const start = `${month}-01`;
     const next = new Date(`${start}T00:00:00Z`);
     next.setUTCMonth(next.getUTCMonth() + 1);
     const end = new Date(next.getTime() - 86400000).toISOString().slice(0, 10);
+    const mealStartDate = new Date(`${start}T00:00:00Z`);
+    mealStartDate.setUTCDate(mealStartDate.getUTCDate() - 1);
+    const mealEndDate = new Date(`${end}T00:00:00Z`);
+    mealEndDate.setUTCDate(mealEndDate.getUTCDate() + 1);
+    const mealStart = mealStartDate.toISOString().slice(0, 10);
+    const mealEnd = mealEndDate.toISOString().slice(0, 10);
     const [meals, closedDays] = await Promise.all([
       fetchAllRows((from, to) => adminDb.from('meal_days').select('meal_date,meal_code')
-        .eq('student_id', student.id).gte('meal_date', start).lte('meal_date', end).order('meal_date').range(from, to)),
+        .eq('student_id', student.id).gte('meal_date', mealStart).lte('meal_date', mealEnd).order('meal_date').range(from, to)),
       adminDb.from('mess_calendar').select('calendar_date,status').eq('tenant_id', tenantId)
         .gte('calendar_date', start).lte('calendar_date', end),
     ]);
     if (closedDays.error) throw closedDays.error;
-    return reply({ student, meals, closedDays: closedDays.data || [] });
+    return reply({ student: { ...student, created_at: createdAt }, meals, closedDays: closedDays.data || [] });
   }
   if (action === 'save-student-meal') {
     await tenantExists(tenantId);
@@ -580,12 +583,16 @@ async function handle(request: Request) {
     for (const id of ids) {
       let accountNumber = '';
       try {
-        const student = await getStudent(String(id), tenantId);
+        const student = await getStudentForPasswordReset(String(id), tenantId);
         accountNumber = student.account_number;
-        const { error } = await adminDb.auth.admin.updateUserById(student.user_id, { password: defaultStudentPassword });
-        if (error) throw error;
+        const admissionNumber = String(student.admission_number || '').trim();
+        const resetPassword = admissionNumber || defaultStudentPassword;
+        const { error: resetError } = await adminDb.auth.admin.updateUserById(student.user_id, { password: resetPassword });
+        if (resetError) throw resetError;
         await audit(actor, tenantId, 'student.password_reset', {
-          account_number: student.account_number, student_name: student.full_name,
+          account_number: student.account_number,
+          student_name: student.full_name,
+          reset_method: admissionNumber ? 'admission_number' : 'fallback_password',
         }, student.id);
         results.push({ id, account_number: accountNumber, ok: true });
       } catch (error) {
