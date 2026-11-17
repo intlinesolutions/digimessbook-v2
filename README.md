@@ -19,6 +19,6 @@ The Vercel project root is client; the build command is npm run build, with outp
 
 Apply the migrations to the intended project and deploy the super-admin Edge Function. The function uses Supabase's built-in SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY; never expose the service-role key to the browser.
 
-Before using student creation or password-reset actions, configure the Edge Function secrets DEFAULT_STUDENT_PASSWORD, RESEND_API_KEY, and PASSWORD_RESET_FROM_EMAIL. The app fails closed if the default password is not configured.
+Student accounts use the admission number as the initial password when one is present. If it is blank, creation and administrator or email-based password resets use the Edge Function secret DEFAULT_STUDENT_PASSWORD. Configure that secret before managing students. Email-based resets also require RESEND_API_KEY and PASSWORD_RESET_FROM_EMAIL.
 
 Create a dedicated administrator in Supabase Auth and set its app metadata to {"role":"super_admin"}. The dashboard checks this role server-side.

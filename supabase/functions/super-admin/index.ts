@@ -9,7 +9,9 @@ const appUrl = Deno.env.get('SUPABASE_URL')!;
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_PUBLISHABLE_KEY') || '';
 const defaultStudentPassword = Deno.env.get('DEFAULT_STUDENT_PASSWORD') || '';
-function requireDefaultStudentPassword() {
+function studentPasswordFor(admissionNumber: unknown) {
+  const password = String(admissionNumber ?? '').trim();
+  if (password) return password;
   if (!defaultStudentPassword) {
     throw Object.assign(
       new Error('Student account setup is unavailable. Contact the system administrator.'),
@@ -162,7 +164,7 @@ async function confirmStudentPasswordReset(body: Record<string, unknown>) {
     throw Object.assign(new Error('The verification code is invalid or expired.'), { status: 400 });
   }
 
-  const { error: resetError } = await adminDb.auth.admin.updateUserById(student.user_id, { password: requireDefaultStudentPassword() });
+  const { error: resetError } = await adminDb.auth.admin.updateUserById(student.user_id, { password: studentPasswordFor(student.admission_number) });
   if (resetError) {
     console.error('Student password could not be reset after OTP verification', resetError);
     throw Object.assign(new Error('Password reset could not be completed. Contact the mess office.'), { status: 500 });
@@ -393,7 +395,7 @@ async function createStudent(input: Record<string, unknown>, tenantId: string) {
   if (!hostel) throw new Error('The selected hostel does not belong to this group.');
   const { data: created, error: authError } = await adminDb.auth.admin.createUser({
     email: emailFor(fields.account_number),
-    password: requireDefaultStudentPassword(),
+    password: studentPasswordFor(fields.admission_number),
     email_confirm: true,
     user_metadata: { account_number: fields.account_number, full_name: fields.full_name },
   });
@@ -440,7 +442,7 @@ async function saveStudent(input: Record<string, unknown>, tenantId: string) {
 }
 
 async function getStudent(studentId: string, tenantId: string) {
-  const { data, error } = await adminDb.from('students').select('id,user_id,account_number,full_name,tenant_id')
+  const { data, error } = await adminDb.from('students').select('id,user_id,account_number,admission_number,full_name,tenant_id')
     .eq('id', studentId).eq('tenant_id', tenantId).maybeSingle();
   if (error) throw error;
   if (!data) throw Object.assign(new Error('Student not found in the selected group.'), { status: 404 });
@@ -591,7 +593,7 @@ async function handle(request: Request) {
       try {
         const student = await getStudent(String(id), tenantId);
         accountNumber = student.account_number;
-        const { error } = await adminDb.auth.admin.updateUserById(student.user_id, { password: requireDefaultStudentPassword() });
+        const { error } = await adminDb.auth.admin.updateUserById(student.user_id, { password: studentPasswordFor(student.admission_number) });
         if (error) throw error;
         await audit(actor, tenantId, 'student.password_reset', {
           account_number: student.account_number, student_name: student.full_name,
