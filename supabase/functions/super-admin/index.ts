@@ -18,7 +18,7 @@ const activityGroups: Record<string, string[]> = {
   day_status: ['day.status_changed', 'day.mess_closed', 'day.opened'],
   admin_controls: ['settings.updated', 'month.deleted'],
   notifications: ['notification.sent'],
-  student_updates: ['meal.created', 'meal.updated', 'student.food_preference_updated'],
+  student_updates: ['meal.created', 'meal.updated', 'meal.range_updated', 'student.food_preference_updated'],
   login: ['auth.login'],
 };
 

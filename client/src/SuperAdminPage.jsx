@@ -102,7 +102,7 @@ function actionLabel(action) {
     'settings.updated': 'Lock settings updated', 'day.mess_closed': 'Mess closed',
     'day.opened': 'Day opened', 'month.deleted': 'Month data deleted',
     'notification.sent': 'Notification sent', 'meal.created': 'Meal entry added',
-    'meal.updated': 'Meal selection updated', 'student.food_preference_updated': 'Food preference updated',
+    'meal.updated': 'Meal selection updated', 'meal.range_updated': 'Multiple days updated', 'student.food_preference_updated': 'Food preference updated',
   };
   return labels[action] || action?.replaceAll('.', ' ') || 'Activity';
 }
@@ -164,7 +164,7 @@ function makeXlsxBlob(rows) {
   const excelRows = [headers, ...rows.map(item => {
     const details = item.details || {};
     const humanDetails = details.status
-      ? `${details.status === 'cut' ? 'Mess cut' : 'Present'} · ${details.date || ''}`
+      ? `${details.status === 'cut' ? 'Mess cut' : 'Present'} · ${details.from_date && details.to_date ? `${details.from_date} – ${details.to_date} (${details.days} days)` : details.date || ''}`
       : details.title
         ? `${details.title} · ${details.recipients || 0} recipients`
         : details.month
@@ -172,7 +172,7 @@ function makeXlsxBlob(rows) {
           : Object.entries(details).map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`).join(' · ');
     return [
       actionLabel(item.action), item.user_type || details.actor_type || 'admin', item.user_name || details.actor_name || '', details.account_number || '',
-      details.date || details.month || '', humanDetails, dateTimeLabel(item.created_at), item.action || '',
+      details.date || (details.from_date && details.to_date ? `${details.from_date} – ${details.to_date}` : details.month) || '', humanDetails, dateTimeLabel(item.created_at), item.action || '',
     ];
   })];
   const sheetRows = excelRows.map((row, rowIndex) => {
@@ -1162,7 +1162,7 @@ export default function SuperAdminPage() {
 
 function ActivityTable({ items, compact = false }) {
   if (!items.length) return <EmptyState title="No activity yet" body="Admin updates will appear here as they happen."/>;
-  return <div className="sa-table-wrap"><table className={`sa-table sa-activity-table ${compact ? 'is-compact' : ''}`}><thead><tr><th>Activity</th><th>User</th><th>Details</th><th>Date & time</th></tr></thead><tbody>{items.map(item => { const details = item.details || {}; const userType = item.user_type || item.actor_type || details.actor_type || (details.source === 'student' ? 'student' : 'admin'); const userName = item.user_name || (userType === 'student' ? [details.account_number, details.student_name].filter(Boolean).join(' - ') : details.actor_name) || (userType === 'student' ? 'Student' : 'Admin'); const targetStudent = userType === 'admin' && details.account_number && details.student_name ? `${details.account_number} - ${details.student_name}` : ''; const detailBody = item.action === 'auth.login' ? 'Successful sign-in' : details.status ? `${details.status === 'cut' ? 'Mess cut' : 'Present'} · ${dateLabel(details.date)}` : details.month ? `Month: ${details.month}` : details.title ? `${details.title} · ${details.recipients} recipients` : details.lock_time ? `Lock time set to ${String(details.lock_time).slice(0, 5)}` : details.note || details.row ? [details.note, details.row ? `Import row ${details.row}` : ''].filter(Boolean).join(' · ') : 'Profile or access details updated'; const detailText = [targetStudent, detailBody].filter(Boolean).join(' · '); return <tr key={item.id}><td><div className="sa-activity-name"><span className={`sa-activity-dot ${item.action?.startsWith('student') || item.action?.startsWith('meal') ? 'is-student' : item.action?.startsWith('day') ? 'is-day' : 'is-admin'}`}><Icon name={item.action?.includes('deleted') ? 'trash' : item.action?.includes('password') ? 'lock' : item.action?.includes('notification') ? 'bell' : item.action?.startsWith('day') ? 'calendar' : item.action === 'auth.login' ? 'shield' : 'edit'} size={15}/></span><b>{actionLabel(item.action)}</b></div></td><td><span className="sa-activity-user"><b>{userName}</b><small>{userType === 'student' ? 'Student' : 'Admin'}</small></span></td><td><span className="sa-activity-detail">{detailText}</span></td><td><span className="sa-activity-date">{dateTimeLabel(item.created_at)}</span></td></tr>; })}</tbody></table></div>;
+  return <div className="sa-table-wrap"><table className={`sa-table sa-activity-table ${compact ? 'is-compact' : ''}`}><thead><tr><th>Activity</th><th>User</th><th>Details</th><th>Date & time</th></tr></thead><tbody>{items.map(item => { const details = item.details || {}; const userType = item.user_type || item.actor_type || details.actor_type || (details.source === 'student' ? 'student' : 'admin'); const userName = item.user_name || (userType === 'student' ? [details.account_number, details.student_name].filter(Boolean).join(' - ') : details.actor_name) || (userType === 'student' ? 'Student' : 'Admin'); const targetStudent = userType === 'admin' && details.account_number && details.student_name ? `${details.account_number} - ${details.student_name}` : ''; const activityDate = details.from_date && details.to_date ? `${dateLabel(details.from_date)} – ${dateLabel(details.to_date)} (${details.days} days)` : dateLabel(details.date); const detailBody = item.action === 'auth.login' ? 'Successful sign-in' : details.status ? `${details.status === 'cut' ? 'Mess cut' : 'Present'} · ${activityDate}` : details.month ? `Month: ${details.month}` : details.title ? `${details.title} · ${details.recipients} recipients` : details.lock_time ? `Lock time set to ${String(details.lock_time).slice(0, 5)}` : details.note || details.row ? [details.note, details.row ? `Import row ${details.row}` : ''].filter(Boolean).join(' · ') : 'Profile or access details updated'; const detailText = [targetStudent, detailBody].filter(Boolean).join(' · '); return <tr key={item.id}><td><div className="sa-activity-name"><span className={`sa-activity-dot ${item.action?.startsWith('student') || item.action?.startsWith('meal') ? 'is-student' : item.action?.startsWith('day') ? 'is-day' : 'is-admin'}`}><Icon name={item.action?.includes('deleted') ? 'trash' : item.action?.includes('password') ? 'lock' : item.action?.includes('notification') ? 'bell' : item.action?.startsWith('day') ? 'calendar' : item.action === 'auth.login' ? 'shield' : 'edit'} size={15}/></span><b>{actionLabel(item.action)}</b></div></td><td><span className="sa-activity-user"><b>{userName}</b><small>{userType === 'student' ? 'Student' : 'Admin'}</small></span></td><td><span className="sa-activity-detail">{detailText}</span></td><td><span className="sa-activity-date">{dateTimeLabel(item.created_at)}</span></td></tr>; })}</tbody></table></div>;
 }
 
 function EmptyState({ title, body }) {
