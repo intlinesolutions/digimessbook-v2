@@ -603,15 +603,12 @@ export default function App() {
     }
     setRangeError('');
     setSavingRange(true);
-    const rows = range.map(date => ({
-      student_id: student.studentId,
-      meal_date: keyOf(date),
-      meal_code: value,
-    }));
     try {
-      const { error: saveError } = await supabase
-        .from('meal_days')
-        .upsert(rows, { onConflict: 'student_id,meal_date' });
+      const { error: saveError } = await supabase.rpc('update_student_meal_range', {
+        p_student: student.studentId,
+        p_meal_dates: range.map(keyOf),
+        p_meal_code: value,
+      });
       if (saveError) {
         setRangeError(saveError.message);
         return;
