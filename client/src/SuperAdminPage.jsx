@@ -82,6 +82,17 @@ function dateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function shiftCalendarDateKey(value, amount) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + amount);
+  return date.toISOString().slice(0, 10);
+}
+
+function studentMealCodeFor(days, value) {
+  if (Object.prototype.hasOwnProperty.call(days || {}, value)) return String(days[value] || '----').trim();
+  return null;
+}
+
 function actionLabel(action) {
   const labels = {
     'auth.login': 'Signed in',
@@ -96,14 +107,15 @@ function actionLabel(action) {
   return labels[action] || action?.replaceAll('.', ' ') || 'Activity';
 }
 
-function parseDelimited(raw, hostels) {
+const bulkHeaders = ['Sl No', 'Full Name', 'Acc no', 'Admission number', 'Hostel', 'Room number', 'Email ID', 'Mobile number', 'Year', 'Department', 'Guardian name', 'Guardian relation', 'Guardian mobile number', 'Blood group', 'Food preference'];
+const bulkFields = ['sl_no', 'full_name', 'account_number', 'admission_number', 'hostel', 'room', 'email', 'mobile_number', 'academic_year', 'department', 'guardian_name', 'guardian_relation', 'guardian_mobile_number', 'blood_group', 'food_preference'];
+
+function parseBulkDelimited(raw, hostels) {
   const lines = raw.split(/\r?\n/).filter(line => line.trim());
-  if (!lines.length) return [];
+  if (lines.length < 2) return [];
   const split = line => {
     const delimiter = line.includes('\t') ? '\t' : ',';
-    const cells = [];
-    let value = '';
-    let quoted = false;
+    const cells = []; let value = ''; let quoted = false;
     for (let index = 0; index < line.length; index += 1) {
       const character = line[index];
       if (character === '"' && line[index + 1] === '"' && quoted) { value += '"'; index += 1; }
@@ -111,44 +123,24 @@ function parseDelimited(raw, hostels) {
       else if (character === delimiter && !quoted) { cells.push(value.trim()); value = ''; }
       else value += character;
     }
-    cells.push(value.trim());
-    return cells;
+    cells.push(value.trim()); return cells;
   };
-  const aliases = {
-    'account number': 'account_number', 'account no': 'account_number', 'account no.': 'account_number', 'account_number': 'account_number', 'acc no': 'account_number', 'acc no.': 'account_number', 'acc number': 'account_number', 'acc_no': 'account_number', 'account': 'account_number',
-    'name': 'full_name', 'full name': 'full_name', 'full_name': 'full_name', 'student name': 'full_name',
-    'admission number': 'admission_number', 'admission no': 'admission_number', 'admission no.': 'admission_number', 'admission_number': 'admission_number',
-    'hostel': 'hostel', 'hostel name': 'hostel', 'hostel_id': 'hostel', 'room': 'room', 'room no': 'room', 'room no.': 'room', 'room number': 'room',
-    'year': 'academic_year', 'academic year': 'academic_year', 'academic_year': 'academic_year',
-    'department': 'department', 'dept': 'department', 'email': 'email', 'email id': 'email', 'email_id': 'email',
-    'mobile': 'mobile_number', 'mobile number': 'mobile_number', 'mobile no': 'mobile_number', 'mobile_number': 'mobile_number',
-    'guardian name': 'guardian_name', 'guardian_name': 'guardian_name', 'guardian relation': 'guardian_relation', 'guardian_relation': 'guardian_relation',
-    'guardian mobile': 'guardian_mobile_number', 'guardian mobile number': 'guardian_mobile_number', 'guardian mob no': 'guardian_mobile_number', 'guardian_mobile_number': 'guardian_mobile_number',
-    'blood group': 'blood_group', 'blood_group': 'blood_group', 'food preference': 'food_preference', 'food_preference': 'food_preference',
-  };
-  const first = split(lines[0]).map(value => aliases[value.toLowerCase()]);
-  const hasHeader = first.includes('account_number') && first.includes('full_name');
-  const headers = hasHeader ? first : ['account_number', 'full_name', 'hostel', 'room', 'academic_year', 'department', 'food_preference', 'admission_number', 'email', 'mobile_number', 'guardian_name', 'guardian_relation', 'guardian_mobile_number', 'blood_group'];
-  const rows = lines.slice(hasHeader ? 1 : 0).map(line => {
+  const headerKeys = split(lines[0]).map(value => value.toLowerCase().replace(/\./g, '').trim());
+  const expected = bulkHeaders.map(value => value.toLowerCase().replace(/\./g, '').trim());
+  if (!expected.every((value, index) => headerKeys[index] === value)) throw new Error('The uploaded list headers do not match the template.');
+  return lines.slice(1).map((line, rowIndex) => {
     const cells = split(line);
-    const values = Object.fromEntries(headers.map((header, index) => [header, cells[index] || '']));
-    const hostel = hostels.find(item => item.name.toLowerCase() === String(values.hostel || '').toLowerCase() || item.id === String(values.hostel || ''));
-    const optionalFields = ['admission_number', 'email', 'mobile_number', 'guardian_name', 'guardian_relation', 'guardian_mobile_number', 'blood_group'];
-    const suppliedOptionalFields = Object.fromEntries(optionalFields
-      .filter(field => headers.includes(field) && (hasHeader || cells.length > headers.indexOf(field)))
-      .map(field => [field, values[field]]));
+    const values = Object.fromEntries(bulkFields.map((field, index) => [field, cells[index] || '']));
+    const hostel = hostels.find(item => item.name.toLowerCase() === values.hostel.toLowerCase() || item.id === values.hostel);
     return {
-      account_number: values.account_number,
-      full_name: values.full_name,
-      hostel_id: hostel?.id || '',
-      room: values.room,
-      academic_year: values.academic_year,
-      department: values.department,
-      food_preference: values.food_preference,
-      ...suppliedOptionalFields,
+      sl_no: values.sl_no, full_name: values.full_name, account_number: values.account_number,
+      admission_number: values.admission_number, hostel_id: hostel?.id || '', room: values.room,
+      email: values.email, mobile_number: values.mobile_number, academic_year: values.academic_year,
+      department: values.department, guardian_name: values.guardian_name, guardian_relation: values.guardian_relation,
+      guardian_mobile_number: values.guardian_mobile_number, blood_group: values.blood_group,
+      food_preference: values.food_preference, _row: rowIndex + 2,
     };
-  });
-  return rows;
+  }).filter(row => Object.values(row).some(value => String(value || '').trim()));
 }
 
 function xmlEscape(value) {
@@ -295,8 +287,11 @@ export default function SuperAdminPage() {
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [studentDialog, setStudentDialog] = useState(null);
   const [bulkDialog, setBulkDialog] = useState(false);
-  const [bulkText, setBulkText] = useState('');
   const [bulkResult, setBulkResult] = useState(null);
+  const [bulkRows, setBulkRows] = useState([]);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkError, setBulkError] = useState('');
+  const [bulkAwaitConfirm, setBulkAwaitConfirm] = useState(false);
   const [studentBusy, setStudentBusy] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [history, setHistory] = useState([]);
@@ -671,7 +666,7 @@ export default function SuperAdminPage() {
 
   function openStudentCalendarDay(date) {
     const key = dateKey(date);
-    const code = studentCalendarDays[key] || '----';
+    const code = studentMealCodeFor(studentCalendarDays, key) || '----';
     setStudentCalendarSelected({ date, key });
     setStudentCalendarForm(Object.fromEntries(['b', 'l', 't', 'd'].map((meal, index) => [meal, code[index] === meal.toUpperCase()])));
     setStudentCalendarNotice('');
@@ -679,7 +674,8 @@ export default function SuperAdminPage() {
 
   async function saveStudentCalendarDay(mealCode) {
     if (!calendarStudent || !studentCalendarSelected || studentCalendarSaveBusy) return;
-    if ((studentCalendarDays[studentCalendarSelected.key] || '----') === mealCode) {
+    if (Object.prototype.hasOwnProperty.call(studentCalendarDays, studentCalendarSelected.key)
+      && studentCalendarDays[studentCalendarSelected.key] === mealCode) {
       setStudentCalendarSelected(null);
       return;
     }
@@ -708,7 +704,7 @@ export default function SuperAdminPage() {
       await callAdmin('save-student', { tenantId, student: studentDialog });
       await refreshDashboard(tenantId);
       setStudentDialog(null);
-      flash('success', studentDialog.id ? 'Student profile updated.' : 'Student account created with the default password.');
+      flash('success', studentDialog.id ? 'Student profile updated.' : 'Student account created. The admission number is the initial password, or the fallback password if none was provided.');
     } catch (error) { flash('error', error.message); }
     finally { setStudentBusy(false); }
   }
@@ -757,24 +753,50 @@ export default function SuperAdminPage() {
     finally { setStudentBusy(false); setConfirm(null); }
   }
 
-  const bulkPreview = useMemo(() => bulkText.trim() ? parseDelimited(bulkText, hostels) : [], [bulkText, hostels]);
+  const bulkPreview = bulkRows;
+  async function downloadStudentTemplate() {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+    const sheet = XLSX.utils.aoa_to_sheet([bulkHeaders, Array(bulkHeaders.length).fill('')]);
+    const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, 'Students');
+    XLSX.writeFile(workbook, 'student-profile-template.xlsx');
+  }
+  async function readBulkFile(file) {
+    setBulkError(''); setBulkRows([]); setBulkResult(null);
+    try {
+      let text;
+      if (/\.csv$/i.test(file.name)) text = await file.text();
+      else {
+        const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', raw: false });
+        text = XLSX.utils.sheet_to_csv(workbook.Sheets[workbook.SheetNames[0]], { blankrows: false });
+      }
+      const parsed = parseBulkDelimited(text, hostels);
+      if (!parsed.length) throw new Error('The file does not contain any student rows.');
+      if (parsed.length > 200) throw new Error('Upload up to 200 student rows at a time.');
+      setBulkRows(parsed);
+    } catch (error) { setBulkError(error.message || 'Unable to read this file.'); }
+  }
   async function importStudents() {
     if (!bulkPreview.length) return;
-    setStudentBusy(true);
-    setBulkResult(null);
-    try {
-      const importResults = [];
-      for (let index = 0; index < bulkPreview.length; index += 200) {
-        const result = await callAdmin('bulk-import', { tenantId, rows: bulkPreview.slice(index, index + 200) });
-        importResults.push(...(result.results || []).map(row => ({ ...row, row: index + row.row })));
+    setBulkAwaitConfirm(true);
+  }
+  async function proceedBulkImport() {
+    setBulkAwaitConfirm(false); setStudentBusy(true); setBulkResult([]); setBulkProgress(0);
+    const results = [];
+    for (let index = 0; index < bulkPreview.length; index += 1) {
+      const row = bulkPreview[index];
+      try {
+        const response = await callAdmin('save-student', { tenantId, student: Object.fromEntries(Object.entries(row).filter(([key]) => !key.startsWith('_') && key !== 'sl_no')) });
+        results.push({ row: row._row || index + 2, full_name: response.student.full_name, account_number: response.student.account_number, hostel: hostels.find(item => item.id === response.student.hostel_id)?.name || '', ok: true });
+      } catch (error) {
+        results.push({ row: row._row || index + 2, full_name: row.full_name, account_number: row.account_number, hostel: hostels.find(item => item.id === row.hostel_id)?.name || row.hostel || '', ok: false, error: error.message });
       }
-      setBulkResult(importResults);
-      await refreshDashboard(tenantId);
-      const added = importResults.filter(row => row.ok).length;
-      const failed = importResults.length - added;
-      flash(failed ? 'error' : 'success', `${added} student row${added === 1 ? '' : 's'} imported${failed ? `; ${failed} need attention` : ''}.`);
-    } catch (error) { flash('error', error.message); }
-    finally { setStudentBusy(false); }
+      setBulkResult([...results]); setBulkProgress(index + 1);
+    }
+    try { await refreshDashboard(tenantId); } catch { /* keep import results visible even if the dashboard refresh fails */ }
+    setStudentBusy(false);
+    const failed = results.filter(row => !row.ok).length;
+    flash(failed ? 'error' : 'success', `${results.length - failed} student${results.length - failed === 1 ? '' : 's'} added${failed ? `; ${failed} failed` : ''}.`);
   }
 
   const dayRows = dayData?.students || [];
@@ -782,7 +804,8 @@ export default function SuperAdminPage() {
   const filteredDayRows = useMemo(() => {
     const query = daySearch.trim().toLowerCase();
     return dayRows.filter(student => {
-      const status = dayMeals[student.id] === '----' ? 'cut' : 'present';
+      const hasMealRecord = Object.prototype.hasOwnProperty.call(dayMeals, student.id);
+      const status = !hasMealRecord ? 'no-record' : dayMeals[student.id] === '----' ? 'cut' : 'present';
       return (!query || [student.account_number, student.full_name, student.room, student.department]
         .some(value => String(value || '').toLowerCase().includes(query))) && (dayFilter === 'all' || status === dayFilter);
     });
@@ -1008,7 +1031,7 @@ export default function SuperAdminPage() {
           </>}
 
           {page === 'students' && <>
-            <div className="sa-page-heading"><div><span className="sa-eyebrow">DIRECTORY</span><h1>Student management</h1><p>Search, filter, and manage student access in one place.</p></div><div className="sa-heading-actions"><button className="sa-button sa-button-secondary" onClick={() => { setBulkResult(null); setBulkDialog(true); }}><Icon name="upload" size={17} /> Bulk import</button><button className="sa-button sa-button-primary" onClick={() => openNewStudent()}><Icon name="plus" size={18} /> Add student</button></div></div>
+            <div className="sa-page-heading"><div><span className="sa-eyebrow">DIRECTORY</span><h1>Student management</h1><p>Search, filter, and manage student access in one place.</p></div><div className="sa-heading-actions"><button className="sa-button sa-button-secondary" onClick={downloadStudentTemplate}><Icon name="download" size={17} /> Download template</button><button className="sa-button sa-button-secondary" onClick={() => { setBulkResult(null); setBulkRows([]); setBulkProgress(0); setBulkError(''); setBulkAwaitConfirm(false); setBulkDialog(true); }}><Icon name="upload" size={17} /> Bulk import</button><button className="sa-button sa-button-primary" onClick={() => openNewStudent()}><Icon name="plus" size={18} /> Add student</button></div></div>
             <section className="sa-card sa-students-card">
               <div className="sa-student-filters">
                 <label className="sa-search-box"><Icon name="search" size={18}/><input type="search" value={studentsSearch} onChange={event => setStudentsSearch(event.target.value)} placeholder="Search name, account no, room…" /></label>
@@ -1016,9 +1039,9 @@ export default function SuperAdminPage() {
                 <select aria-label="Filter by year" value={studentsYear} onChange={event => setStudentsYear(event.target.value)}><option value="all">All years</option>{years.map(year => <option key={year}>{year}</option>)}</select>
                 <select aria-label="Filter by department" value={studentsDepartment} onChange={event => setStudentsDepartment(event.target.value)}><option value="all">All departments</option>{departments.map(department => <option key={department}>{department}</option>)}</select>
               </div>
-              {selectedStudents.length > 0 && <div className="sa-bulk-toolbar"><span><b>{selectedStudents.length}</b> selected</span><button className="sa-button sa-button-soft" onClick={() => setConfirm({ title: 'Reset student passwords?', message: `Reset ${selectedStudents.length} selected student password${selectedStudents.length === 1 ? '' : 's'} to the configured default password?`, confirmText: 'Reset passwords', run: () => doReset(selectedStudents) })}><Icon name="lock" size={16}/> Reset passwords</button><button className="sa-text-button" onClick={() => setSelectedStudents([])}>Clear selection</button></div>}
+              {selectedStudents.length > 0 && <div className="sa-bulk-toolbar"><span><b>{selectedStudents.length}</b> selected</span><button className="sa-button sa-button-soft" onClick={() => setConfirm({ title: 'Reset student passwords?', message: `Set each selected student's password to their admission number. Students without an admission number will use the configured default student password. No email will be sent.`, confirmText: 'Reset passwords', run: () => doReset(selectedStudents) })}><Icon name="lock" size={16}/> Reset passwords</button><button className="sa-text-button" onClick={() => setSelectedStudents([])}>Clear selection</button></div>}
               <div className="sa-table-wrap"><table className="sa-table"><thead><tr><th><input type="checkbox" aria-label="Select all visible students" checked={filteredStudents.length > 0 && filteredStudents.every(student => selectedStudents.includes(student.id))} onChange={toggleVisibleStudents}/></th><th>Student</th><th>Account no.</th><th>Hostel / room</th><th>Year</th><th>Department</th><th>Actions</th></tr></thead><tbody>
-                {filteredStudents.map(student => <tr key={student.id}><td><input type="checkbox" aria-label={`Select ${student.full_name}`} checked={selectedStudents.includes(student.id)} onChange={() => toggleStudent(student.id)}/></td><td><div className="sa-student-cell"><span className="sa-student-avatar">{student.full_name?.slice(0, 1).toUpperCase()}</span><span><b>{student.full_name}</b><small>{student.food_preference || 'No food preference'}</small></span></div></td><td><span className="sa-mono">{student.account_number}</span></td><td><b>{student.hostels?.name || '—'}</b><small className="sa-secondary-line">Room {student.room || '—'}</small></td><td>{student.academic_year || '—'}</td><td>{student.department || '—'}</td><td><div className="sa-row-actions"><button title="Edit student" aria-label={`Edit ${student.full_name}`} onClick={() => openNewStudent(student)}><Icon name="edit" size={17}/></button><button title="Open student calendar" aria-label={`Open ${student.full_name}'s meal calendar`} onClick={() => openStudentCalendar(student)}><Icon name="calendar" size={16}/></button><button title="Reset password" aria-label={`Reset ${student.full_name}'s password`} onClick={() => setConfirm({ title: 'Reset this password?', message: `Reset ${student.full_name} (${student.account_number}) to the configured default password?`, confirmText: 'Reset password', run: () => doReset([student.id]) })}><Icon name="lock" size={16}/></button><button title="Delete student" aria-label={`Delete ${student.full_name}`} className="is-danger" onClick={() => setConfirm({ title: 'Delete this student?', message: `This removes ${student.full_name} and their login, meal entries, and notifications. The admin audit history is retained.`, confirmText: 'Delete student', danger: true, run: () => doDeleteStudent(student) })}><Icon name="trash" size={16}/></button></div></td></tr>)}
+                {filteredStudents.map(student => <tr key={student.id}><td><input type="checkbox" aria-label={`Select ${student.full_name}`} checked={selectedStudents.includes(student.id)} onChange={() => toggleStudent(student.id)}/></td><td><div className="sa-student-cell"><span className="sa-student-avatar">{student.full_name?.slice(0, 1).toUpperCase()}</span><span><b>{student.full_name}</b><small>{student.food_preference || 'No food preference'}</small></span></div></td><td><span className="sa-mono">{student.account_number}</span></td><td><b>{student.hostels?.name || '—'}</b><small className="sa-secondary-line">Room {student.room || '—'}</small></td><td>{student.academic_year || '—'}</td><td>{student.department || '—'}</td><td><div className="sa-row-actions"><button title="Edit student" aria-label={`Edit ${student.full_name}`} onClick={() => openNewStudent(student)}><Icon name="edit" size={17}/></button><button title="Open student calendar" aria-label={`Open ${student.full_name}'s meal calendar`} onClick={() => openStudentCalendar(student)}><Icon name="calendar" size={16}/></button><button title="Reset password" aria-label={`Reset ${student.full_name}'s password`} onClick={() => setConfirm({ title: 'Reset this password?', message: `Set ${student.full_name} (${student.account_number})'s password to their admission number${String(student.admission_number || '').trim() ? '' : ', or to the configured default student password because no admission number is on file'}. No email will be sent.`, confirmText: 'Reset password', run: () => doReset([student.id]) })}><Icon name="lock" size={16}/></button><button title="Delete student" aria-label={`Delete ${student.full_name}`} className="is-danger" onClick={() => setConfirm({ title: 'Delete this student?', message: `This removes ${student.full_name} and their login, meal entries, and notifications. The admin audit history is retained.`, confirmText: 'Delete student', danger: true, run: () => doDeleteStudent(student) })}><Icon name="trash" size={16}/></button></div></td></tr>)}
               </tbody></table>{filteredStudents.length === 0 && <EmptyState title="No students found" body="Try a different search term or filter."/>}</div>
               <div className="sa-table-footer"><span>Showing <b>{filteredStudents.length}</b> of {students.length} students</span><button className="sa-link-button" onClick={() => navigate('history')}>View student history <Icon name="arrow" size={15}/></button></div>
             </section>
@@ -1043,10 +1066,10 @@ export default function SuperAdminPage() {
 
           {page === 'attendance' && <>
             <div className="sa-page-heading"><div><span className="sa-eyebrow">ATTENDANCE OVERRIDE</span><h1>Change day status</h1><p>Set a student to present or cut for any date, whether locked or open.</p></div><StatusPill tone={dayIsLocked(dayDate) ? 'amber' : 'green'}>{dayIsLocked(dayDate) ? 'Date is locked' : 'Date is open'}</StatusPill></div>
-            <section className="sa-card sa-day-filter-card"><div className="sa-day-filter-row"><label className="sa-field sa-date-field"><span>Attendance date</span><input type="date" value={dayDate} onChange={event => setDayDate(event.target.value)}/></label><label className="sa-search-box"><Icon name="search" size={18}/><input type="search" value={daySearch} onChange={event => setDaySearch(event.target.value)} placeholder="Find a student…"/></label><label className="sa-field sa-filter-field"><span>Current status</span><select value={dayFilter} onChange={event => setDayFilter(event.target.value)}><option value="all">All students</option><option value="present">Present</option><option value="cut">Mess cut</option></select></label></div>
+            <section className="sa-card sa-day-filter-card"><div className="sa-day-filter-row"><label className="sa-field sa-date-field"><span>Attendance date</span><input type="date" value={dayDate} onChange={event => setDayDate(event.target.value)}/></label><label className="sa-search-box"><Icon name="search" size={18}/><input type="search" value={daySearch} onChange={event => setDaySearch(event.target.value)} placeholder="Find a student…"/></label><label className="sa-field sa-filter-field"><span>Current status</span><select value={dayFilter} onChange={event => setDayFilter(event.target.value)}><option value="all">All students</option><option value="present">Present</option><option value="cut">Mess cut</option><option value="no-record">No meal record</option></select></label></div>
               {dayData?.calendar?.status === 'closed' && <div className="sa-inline-alert"><Icon name="alert" size={17}/><span><b>Mess Closed</b> is set for this day. You can still override individual student statuses.</span></div>}
               <div className="sa-day-summary"><div><span className="sa-day-summary-icon"><Icon name="calendar"/></span><span><b>{dateLabel(dayDate)}</b><small>{filteredDayRows.length} students shown · {dayRows.length} total</small></span></div><span className="sa-override-note"><Icon name="shield" size={16}/> Admin override available</span></div>
-              <div className="sa-table-wrap"><table className="sa-table sa-day-table"><thead><tr><th>Student</th><th>Account / room</th><th>Hostel</th><th>Current status</th><th>Set status</th></tr></thead><tbody>{filteredDayRows.map(student => { const cut = dayMeals[student.id] === '----'; return <tr key={student.id}><td><div className="sa-student-cell"><span className="sa-student-avatar">{student.full_name?.slice(0, 1).toUpperCase()}</span><span><b>{student.full_name}</b><small>{student.department || 'Department not set'}</small></span></div></td><td><span className="sa-mono">{student.account_number}</span><small className="sa-secondary-line">Room {student.room || '—'}</small></td><td>{student.hostels?.name || '—'}</td><td><StatusPill tone={cut ? 'amber' : 'green'}>{cut ? 'Mess cut' : 'Present'}</StatusPill></td><td><div className="sa-status-actions"><button disabled={dayBusy || !cut} className={`sa-status-button ${!cut ? 'is-current' : ''}`} onClick={() => changeDayStatus(student.id, 'present')}><Icon name="check" size={15}/> Present</button><button disabled={dayBusy || cut} className={`sa-status-button is-cut ${cut ? 'is-current' : ''}`} onClick={() => changeDayStatus(student.id, 'cut')}><Icon name="close" size={15}/> Cut</button></div></td></tr>; })}</tbody></table>
+              <div className="sa-table-wrap"><table className="sa-table sa-day-table"><thead><tr><th>Student</th><th>Account / room</th><th>Hostel</th><th>Current status</th><th>Set status</th></tr></thead><tbody>{filteredDayRows.map(student => { const hasMealRecord = Object.prototype.hasOwnProperty.call(dayMeals, student.id); const cut = hasMealRecord && dayMeals[student.id] === '----'; const present = hasMealRecord && !cut; return <tr key={student.id}><td><div className="sa-student-cell"><span className="sa-student-avatar">{student.full_name?.slice(0, 1).toUpperCase()}</span><span><b>{student.full_name}</b><small>{student.department || 'Department not set'}</small></span></div></td><td><span className="sa-mono">{student.account_number}</span><small className="sa-secondary-line">Room {student.room || '—'}</small></td><td>{student.hostels?.name || '—'}</td><td><StatusPill tone={cut ? 'amber' : present ? 'green' : 'neutral'}>{cut ? 'Mess cut' : present ? 'Present' : 'No meal record'}</StatusPill></td><td><div className="sa-status-actions"><button disabled={dayBusy || present} className={`sa-status-button ${present ? 'is-current' : ''}`} onClick={() => changeDayStatus(student.id, 'present')}><Icon name="check" size={15}/> Present</button><button disabled={dayBusy || cut} className={`sa-status-button is-cut ${cut ? 'is-current' : ''}`} onClick={() => changeDayStatus(student.id, 'cut')}><Icon name="close" size={15}/> Cut</button></div></td></tr>; })}</tbody></table>
                 {dayBusy && !dayData && <div className="sa-loading-row"><span className="sa-loader"/> Loading students…</div>}
                 {!dayBusy && filteredDayRows.length === 0 && <EmptyState title="No students found" body="Try a different search or filter."/>}
               </div>
@@ -1109,18 +1132,22 @@ export default function SuperAdminPage() {
                 <legend>Food preference <small>Select all that apply; Veg only is exclusive.</small></legend>
                 <div className="sa-food-preferences">{foodOptions.map(option => { const selected = String(studentDialog.food_preference || '').split(',').map(value => value.trim()).includes(option); return <label className={`sa-food-choice ${selected ? 'is-selected' : ''}`} key={option}><input type="checkbox" checked={selected} onChange={event => { const current = String(studentDialog.food_preference || '').split(',').map(value => value.trim()).filter(Boolean); const next = event.target.checked ? option === 'Veg only' ? ['Veg only'] : [...current.filter(value => value !== 'Veg only'), option] : current.filter(value => value !== option); setStudentDialog({ ...studentDialog, food_preference: foodOptions.filter(value => next.includes(value)).join(', ') }); }} /><span>{option}</span></label>; })}</div>
               </fieldset>
-              {!studentDialog.id && <div className="sa-modal-hint"><Icon name="lock" size={16} /> Login created with the default password set for this environment.</div>}
+              {!studentDialog.id && <div className="sa-modal-hint"><Icon name="lock" size={16} /> Initial password is the admission number, or the configured default student password if no admission number is on file.</div>}
               <div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setStudentDialog(null)}>Cancel</button><button className="sa-button sa-button-primary" disabled={studentBusy}>{studentBusy ? 'Saving…' : studentDialog.id ? 'Save changes' : 'Create student'}</button></div>
             </form>
           </section>
         </div>
       )}
 
-      {calendarStudent && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !studentCalendarSaveBusy) { setCalendarStudent(null); setStudentCalendarSelected(null); } }}><section className="sa-modal sa-student-calendar-modal" role="dialog" aria-modal="true" aria-labelledby="student-calendar-title"><div className="sa-modal-heading"><span className="sa-control-icon is-green"><Icon name="calendar"/></span><div><h2 id="student-calendar-title">Meal calendar</h2><p>{calendarStudent.full_name} · {calendarStudent.account_number}</p></div><button className="sa-modal-close" disabled={studentCalendarSaveBusy} onClick={() => { setCalendarStudent(null); setStudentCalendarSelected(null); }} aria-label="Close student calendar"><Icon name="close"/></button></div><div className="sa-student-calendar-month"><button type="button" aria-label="Previous month" onClick={() => moveStudentCalendarMonth(-1)}>‹</button><b>{studentCalendarDates[0] ? new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' }).format(studentCalendarDates[0]) : studentCalendarMonth}</b><button type="button" aria-label="Next month" onClick={() => moveStudentCalendarMonth(1)}>›</button></div>{studentCalendarNotice && <div className="sa-student-calendar-notice" role="status">{studentCalendarNotice}</div>}{studentCalendarError && <p className="sa-form-error" role="alert">{studentCalendarError}</p>}{studentCalendarBusy ? <div className="sa-loading-row"><span className="sa-loader"/> Loading meal days…</div> : <><div className="calendar-weekdays sa-admin-calendar-weekdays" aria-hidden="true">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <span key={day}>{day}</span>)}</div><div className="calendar-days sa-admin-calendar-days">{Array(studentCalendarFirstWeekday).fill(0).map((_, index) => <span className="calendar-empty" key={`calendar-empty-${index}`}/>)}{studentCalendarDates.map((date, index) => { const key = dateKey(date); const code = studentCalendarDays[key] || '----'; const cut = code === '----'; const previousCut = index > 0 && (studentCalendarDays[dateKey(studentCalendarDates[index - 1])] || '----') === '----'; const nextCut = index < studentCalendarDates.length - 1 && (studentCalendarDays[dateKey(studentCalendarDates[index + 1])] || '----') === '----'; const adjacentCut = cut && (previousCut || nextCut); const isToday = key === data?.today; const isClosed = studentCalendarClosedDays[key] === 'closed'; return <button type="button" key={key} className={`day ${isToday ? 'is-today' : ''} ${studentCalendarSelected?.key === key ? 'is-selected' : ''} ${isClosed ? 'sa-admin-closed-day' : ''}`} disabled={studentCalendarBusy || studentCalendarSaveBusy} aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${isClosed ? ', mess closed' : ''}`} onClick={() => openStudentCalendarDay(date)}><span>{date.getDate()}</span><i className="day-dot" style={{ background: cut ? adjacentCut ? '#d22' : '#f1ca28' : '#4caf50' }}/></button>; })}</div><div className="calendar-legend sa-admin-calendar-legend"><span><i className="legend-dot present"/>Meals selected</span><span><i className="legend-dot single-cut"/>Single mess cut</span><span><i className="legend-dot adjacent-cut"/>Adjacent mess cuts</span><span><i className="sa-admin-closed-dot"/>Mess Closed</span></div><div className="sa-student-calendar-note"><Icon name="shield" size={15}/> Admin can edit every date, including locked and Mess Closed days.</div></> }<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => { setCalendarStudent(null); setStudentCalendarSelected(null); }}>Close calendar</button></div></section></div>}
+      {calendarStudent && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !studentCalendarSaveBusy) { setCalendarStudent(null); setStudentCalendarSelected(null); } }}><section className="sa-modal sa-student-calendar-modal" role="dialog" aria-modal="true" aria-labelledby="student-calendar-title"><div className="sa-modal-heading"><span className="sa-control-icon is-green"><Icon name="calendar"/></span><div><h2 id="student-calendar-title">Meal calendar</h2><p>{calendarStudent.full_name} · {calendarStudent.account_number}</p></div><button className="sa-modal-close" disabled={studentCalendarSaveBusy} onClick={() => { setCalendarStudent(null); setStudentCalendarSelected(null); }} aria-label="Close student calendar"><Icon name="close"/></button></div><div className="sa-student-calendar-month"><button type="button" aria-label="Previous month" onClick={() => moveStudentCalendarMonth(-1)}>‹</button><b>{studentCalendarDates[0] ? new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' }).format(studentCalendarDates[0]) : studentCalendarMonth}</b><button type="button" aria-label="Next month" onClick={() => moveStudentCalendarMonth(1)}>›</button></div>{studentCalendarNotice && <div className="sa-student-calendar-notice" role="status">{studentCalendarNotice}</div>}{studentCalendarError && <p className="sa-form-error" role="alert">{studentCalendarError}</p>}{studentCalendarBusy ? <div className="sa-loading-row"><span className="sa-loader"/> Loading meal days…</div> : <><div className="calendar-weekdays sa-admin-calendar-weekdays" aria-hidden="true">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => <span key={day}>{day}</span>)}</div><div className="calendar-days sa-admin-calendar-days">{Array(studentCalendarFirstWeekday).fill(0).map((_, index) => <span className="calendar-empty" key={`calendar-empty-${index}`}/>)}{studentCalendarDates.map(date => { const key = dateKey(date); const code = studentMealCodeFor(studentCalendarDays, key); const cut = code === '----'; const previousCut = studentMealCodeFor(studentCalendarDays, shiftCalendarDateKey(key, -1)) === '----'; const nextCut = studentMealCodeFor(studentCalendarDays, shiftCalendarDateKey(key, 1)) === '----'; const adjacentCut = cut && (previousCut || nextCut); const dotColor = code === null ? '#cbd5ce' : cut ? adjacentCut ? '#d22' : '#f1ca28' : '#4caf50'; const isToday = key === data?.today; const isClosed = studentCalendarClosedDays[key] === 'closed'; return <button type="button" key={key} className={`day ${isToday ? 'is-today' : ''} ${studentCalendarSelected?.key === key ? 'is-selected' : ''} ${isClosed ? 'sa-admin-closed-day' : ''}`} disabled={studentCalendarBusy || studentCalendarSaveBusy} aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${isClosed ? ', mess closed' : ''}`} onClick={() => openStudentCalendarDay(date)}><span>{date.getDate()}</span><i className="day-dot" style={{ background: dotColor }}/></button>; })}</div><div className="calendar-legend sa-admin-calendar-legend"><span><i className="legend-dot present"/>Meals selected</span><span><i className="legend-dot single-cut"/>Single mess cut</span><span><i className="legend-dot adjacent-cut"/>Adjacent mess cuts</span><span><i className="legend-dot no-data"/>No meal data</span><span><i className="sa-admin-closed-dot"/>Mess Closed</span></div><div className="sa-student-calendar-note"><Icon name="shield" size={15}/> Admin can edit every date, including locked and Mess Closed days.</div></> }<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => { setCalendarStudent(null); setStudentCalendarSelected(null); }}>Close calendar</button></div></section></div>}
 
       {calendarStudent && studentCalendarSelected && <div className="sa-modal-overlay sa-student-day-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !studentCalendarSaveBusy) setStudentCalendarSelected(null); }}><section className="modal-card day-modal sa-admin-day-modal" role="dialog" aria-modal="true" aria-labelledby="student-day-title"><div className="sheet-handle"/><header className="modal-header"><span className="section-icon"><Icon name="calendar"/></span><div><span className="eyebrow">MEAL SELECTION · ADMIN OVERRIDE</span><h2 id="student-day-title">{studentCalendarSelected.date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</h2></div><button type="button" className="icon-button modal-close" aria-label="Close day details" disabled={studentCalendarSaveBusy} onClick={() => setStudentCalendarSelected(null)}><Icon name="close"/></button></header><h3 className="modal-section-title">Select Meals</h3><div className="meal-options">{[['b', 'Breakfast', 'coffee'], ['l', 'Lunch', 'lunch'], ['t', 'Evening Tea', 'tea'], ['d', 'Dinner', 'dinner']].map(([key, label, icon]) => <label className="meal-option" key={key}><input type="checkbox" disabled={studentCalendarSaveBusy} checked={!!studentCalendarForm[key]} onChange={event => setStudentCalendarForm(current => ({ ...current, [key]: event.target.checked }))}/><Icon name={icon} size={25}/><span>{label}</span></label>)}</div><div className="day-status"><b>Day Status</b><span><i/>{studentCalendarClosedDays[studentCalendarSelected.key] === 'closed' ? 'Mess Closed · admin override is available' : 'Admin access · all dates are editable'}</span></div>{studentCalendarError && <p className="modal-notice" role="alert">{studentCalendarError}</p>}<div className="modal-actions"><button type="button" className="outline-button cancel-day-button" disabled={studentCalendarSaveBusy} onClick={() => setStudentCalendarSelected(null)}>Cancel</button><button type="button" className="outline-button update-day-button" disabled={studentCalendarSaveBusy} onClick={() => saveStudentCalendarDay(['b', 'l', 't', 'd'].map(key => studentCalendarForm[key] ? key.toUpperCase() : '-').join(''))}>{studentCalendarSaveBusy ? 'Updating…' : 'Update'}</button></div><div className="quick-actions"><button type="button" className="primary-button quick-full-day" disabled={studentCalendarSaveBusy} onClick={() => saveStudentCalendarDay('BLTD')}>Full Day</button><button type="button" className="quick-mess-cut" disabled={studentCalendarSaveBusy} onClick={() => saveStudentCalendarDay('----')}>Mess Cut</button></div></section></div>}
 
-      {bulkDialog && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !studentBusy) setBulkDialog(false); }}><section className="sa-modal sa-bulk-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-modal-title"><div className="sa-modal-heading"><span className="sa-control-icon is-blue"><Icon name="upload"/></span><div><h2 id="bulk-modal-title">Import students</h2><p>Paste rows copied from Excel or a CSV file.</p></div><button className="sa-modal-close" onClick={() => setBulkDialog(false)} aria-label="Close"><Icon name="close"/></button></div><div className="sa-bulk-instructions"><b>Columns</b><span>Account number · Name · Hostel · Room · Year · Department · Food preference · Optional profile details</span><small>Optional columns: Admission number, Email ID, Mobile number, Guardian name, Guardian relation, Guardian Mob No, and Blood group. Older imports keep saved profile details.</small></div><textarea className="sa-bulk-textarea" value={bulkText} onChange={event => { setBulkText(event.target.value); setBulkResult(null); }} placeholder={'Account number\tName\tHostel\tRoom\tYear\tDepartment\tFood preference\n24B006\tAarav Nair\tMH 1\t104\t2026\tCSE\tVeg only'} rows={8}/><div className="sa-bulk-meta"><span>{bulkPreview.length} student row{bulkPreview.length === 1 ? '' : 's'} detected</span><span>Up to 200 per import</span></div>{bulkResult && <div className="sa-import-results">{bulkResult.filter(row => row.ok).length} succeeded · {bulkResult.filter(row => !row.ok).length} failed{bulkResult.filter(row => !row.ok).slice(0, 3).map(row => <small key={row.row}>Row {row.row}: {row.error}</small>)}</div>}<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setBulkDialog(false)}>Close</button><button className="sa-button sa-button-primary" disabled={studentBusy || !bulkPreview.length} onClick={importStudents}>{studentBusy ? 'Importing…' : `Import ${bulkPreview.length || ''} rows`}</button></div></section></div>}
+      {bulkDialog && <div className="sa-modal-overlay" role="presentation"><section className="sa-modal sa-bulk-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-modal-title"><div className="sa-modal-heading"><span className="sa-control-icon is-blue"><Icon name="upload"/></span><div><h2 id="bulk-modal-title">Import students</h2><p>Upload a completed student template in Excel or CSV format.</p></div><button className="sa-modal-close" disabled={studentBusy} onClick={() => { setBulkDialog(false); setBulkRows([]); setBulkResult(null); }} aria-label="Close"><Icon name="close"/></button></div>
+        {!bulkAwaitConfirm && !bulkResult?.length && <><div className="sa-bulk-instructions"><b>Template columns</b><span>{bulkHeaders.join(' · ')}</span><small>Use the template in the same order. Hostel, year, department, blood group, and food preference should match the listed profile options.</small></div><label className="sa-bulk-upload"><Icon name="upload" size={21}/><b>Choose a filled student list</b><span>Excel (.xlsx) or CSV · up to 200 students</span><input type="file" accept=".xlsx,.xls,.csv" onChange={event => event.target.files?.[0] && readBulkFile(event.target.files[0])}/></label>{bulkError && <p className="sa-form-error" role="alert">{bulkError}</p>}{bulkPreview.length > 0 && <div className="sa-bulk-meta"><span>{bulkPreview.length} student{bulkPreview.length === 1 ? '' : 's'} ready to add</span><span>Review before proceeding</span></div>}<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => { setBulkDialog(false); setBulkRows([]); }}>Cancel</button><button className="sa-button sa-button-primary" disabled={!bulkPreview.length} onClick={importStudents}>Continue</button></div></>}
+        {bulkAwaitConfirm && <><div className="sa-import-confirm"><b>{bulkPreview.length} student{bulkPreview.length === 1 ? '' : 's'} will be added.</b><span>Proceed to create them one at a time, or cancel to discard this upload.</span></div><div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => { setBulkAwaitConfirm(false); setBulkRows([]); setBulkError(''); }}>Cancel upload</button><button className="sa-button sa-button-primary" onClick={proceedBulkImport}>Proceed</button></div></>}
+        {(studentBusy || (bulkResult && bulkResult.length > 0)) && <><div className="sa-import-progress"><span className="sa-progress-ring" style={{ '--progress': `${bulkProgress / Math.max(bulkPreview.length, 1) * 100}%` }}><b>{bulkProgress}/{bulkPreview.length}</b></span><span><b>{studentBusy ? 'Adding students…' : 'Import complete'}</b><small>{bulkResult?.filter(row => row.ok).length || 0} succeeded · {bulkResult?.filter(row => !row.ok).length || 0} failed</small></span></div><div className="sa-import-list"><div className="sa-import-list-head"><b>Student</b><b>Acc no</b><b>Hostel</b><b>Status</b></div>{bulkResult?.map((row, index) => <div className="sa-import-list-row" key={`${row.row}-${index}`}><span>{row.full_name || '—'}{row.error && <small>{row.error}</small>}</span><span>{row.account_number || '—'}</span><span>{row.hostel || '—'}</span><b className={row.ok ? 'is-success' : 'is-failed'}>{row.ok ? 'Success' : 'Failed'}</b></div>)}</div><div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" disabled={studentBusy} onClick={() => { setBulkDialog(false); setBulkRows([]); setBulkResult(null); }}>Close</button></div></>}
+      </section></div>}
 
       {closedDaysDialog && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setClosedDaysDialog(false); }}><section className="sa-modal sa-closed-days-modal" role="dialog" aria-modal="true" aria-labelledby="closed-days-title"><div className="sa-modal-heading"><span className="sa-control-icon is-amber"><Icon name="calendar"/></span><div><h2 id="closed-days-title">Mess closed days</h2><p>All closed dates for {selectedTenant?.name || 'this mess'}.</p></div><button className="sa-modal-close" onClick={() => setClosedDaysDialog(false)} aria-label="Close"><Icon name="close"/></button></div>{closedDaysListBusy ? <div className="sa-loading-row"><span className="sa-loader"/> Loading closed days…</div> : closedDaysList.length ? <div className="sa-closed-days-list">{closedDaysList.map(day => <div className="sa-closed-day-row" key={day.calendar_date}><span className="sa-closed-day-icon"><Icon name="calendar" size={16}/></span><span><b>{dateLabel(day.calendar_date)}</b><small>{day.note || 'Mess service closed'}</small></span><StatusPill tone="amber">Mess Closed</StatusPill></div>)}</div> : <EmptyState title="No closed days" body="No dates are currently marked as Mess Closed."/>}<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setClosedDaysDialog(false)}>Close</button></div></section></div>}
 

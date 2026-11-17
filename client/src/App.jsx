@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
-import { supabase } from './supabase';
+import { passwordRecoveryStorageKey, supabase } from './supabase';
 import MessCountPage from './MessCountPage.jsx';
 import StudentsListPage from './StudentsListPage.jsx';
 const SuperAdminPage = lazy(() => import('./SuperAdminPage.jsx'));
@@ -12,8 +12,45 @@ const meals = [
   ['d', 'Dinner', 'dinner'],
 ];
 const foodOptions = ['Chicken', 'Fish', 'Egg', 'Beef', 'Veg only'];
-const dates = Array.from({ length: 30 }, (_, i) => new Date(2026, 10, i + 1));
 const keyOf = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function shiftDate(date, amount) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + amount);
+}
+function shiftDateKey(dateKey, amount) {
+  const date = new Date(`${dateKey}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + amount);
+  return date.toISOString().slice(0, 10);
+}
+function getCurrentMonthKey() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit',
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}`;
+}
+function shiftMonthKey(monthKey, amount) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const date = new Date(year, month - 1 + amount, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+function datesForMonth(monthKey) {
+  const [year, month] = monthKey.split('-').map(Number);
+  return Array.from({ length: new Date(year, month, 0).getDate() }, (_, index) => new Date(year, month - 1, index + 1));
+}
+function monthBounds(monthKey) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const lastDay = new Date(year, month, 0).getDate();
+  return { start: `${monthKey}-01`, end: `${monthKey}-${String(lastDay).padStart(2, '0')}` };
+}
+function monthLabel(monthKey) {
+  const [year, month] = monthKey.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, month - 1, 1)));
+}
+function mealCodeFor(days, date) {
+  const dateKey = keyOf(date);
+  if (Object.prototype.hasOwnProperty.call(days || {}, dateKey)) return String(days[dateKey] || '----').trim();
+  return null;
+}
 const locked = (d, rules, closedDays) => {
   if (closedDays?.[keyOf(d)] === 'closed') return true;
   const lockDays = Number(rules?.lock_days_before ?? 1);
@@ -53,21 +90,38 @@ const isToday = d => {
     && d.getDate() === today.getDate();
 };
 
-function billable(days) {
-  const vals = dates.map(d => days[keyOf(d)] || '----');
+function billable(days, dates) {
   let n = 0;
-  for (let i = 0; i < vals.length;) {
-    if (vals[i] === '----') {
-      let j = i;
-      while (j < vals.length && vals[j] === '----') j++;
-      if (j - i === 1) n++;
-      i = j;
-    } else {
+  for (const date of dates) {
+    const code = mealCodeFor(days, date);
+    if (code === null) continue;
+    if (code !== '----') {
       n++;
-      i++;
+      continue;
     }
+    const previousCut = mealCodeFor(days, shiftDate(date, -1)) === '----';
+    const nextCut = mealCodeFor(days, shiftDate(date, 1)) === '----';
+    if (!previousCut && !nextCut) n++;
   }
   return n;
+}
+
+async function fetchStudentMonthData(studentId, tenantId, monthKey) {
+  const { start, end } = monthBounds(monthKey);
+  const mealStart = shiftDateKey(start, -1);
+  const mealEnd = shiftDateKey(end, 1);
+  const [mealResult, closedDaysResult] = await Promise.all([
+    supabase.from('meal_days').select('meal_date,meal_code').eq('student_id', studentId)
+      .gte('meal_date', mealStart).lte('meal_date', mealEnd).order('meal_date'),
+    supabase.from('mess_calendar').select('calendar_date,status').eq('tenant_id', tenantId)
+      .gte('calendar_date', start).lte('calendar_date', end),
+  ]);
+  if (mealResult.error) throw mealResult.error;
+  if (closedDaysResult.error) throw closedDaysResult.error;
+  return {
+    days: Object.fromEntries((mealResult.data || []).map(row => [row.meal_date, row.meal_code.trim()])),
+    closedDays: Object.fromEntries((closedDaysResult.data || []).map(day => [day.calendar_date, day.status])),
+  };
 }
 
 const iconShapes = {
@@ -126,20 +180,22 @@ function getGreeting() {
 }
 
 export default function App() {
+  const [currentMonth, setCurrentMonth] = useState(() => getCurrentMonthKey());
+  const [selectedMonth, setSelectedMonth] = useState(() => getCurrentMonthKey());
+  const [loadedMonth, setLoadedMonth] = useState('');
+  const [monthLoading, setMonthLoading] = useState(false);
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [student, setStudent] = useState(null);
   const [acc, setAcc] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [forgotMode, setForgotMode] = useState(false);
-  const [forgotAccountNumber, setForgotAccountNumber] = useState('');
-  const [forgotAdmissionNumber, setForgotAdmissionNumber] = useState('');
-  const [forgotOtp, setForgotOtp] = useState('');
-  const [forgotOtpSent, setForgotOtpSent] = useState(false);
-  const [forgotComplete, setForgotComplete] = useState(false);
-  const [forgotBusy, setForgotBusy] = useState(false);
-  const [forgotError, setForgotError] = useState('');
-  const [forgotMessage, setForgotMessage] = useState('');
+  const [recoveryStatus, setRecoveryStatus] = useState('checking');
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [confirmRecoveryPassword, setConfirmRecoveryPassword] = useState('');
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({});
   const [foodOpen, setFoodOpen] = useState(false);
@@ -162,23 +218,82 @@ export default function App() {
   const [messRules, setMessRules] = useState({ lock_days_before: 1, lock_time: '19:00:00', timezone: 'Asia/Kolkata' });
   const [closedDays, setClosedDays] = useState({});
   const [summaryModal, setSummaryModal] = useState('');
-  const [summaryMonthIsCurrent, setSummaryMonthIsCurrent] = useState(false);
   const [rangeStart, setRangeStart] = useState(null);
   const [rangeEnd, setRangeEnd] = useState(null);
   const [rangeError, setRangeError] = useState('');
   const [savingRange, setSavingRange] = useState(false);
   const noticeTimer = useRef(null);
+  const monthRequestRef = useRef(0);
+  const monthPickerRef = useRef(null);
   const welcomeNameRef = useRef(null);
 
+  const dates = useMemo(() => datesForMonth(selectedMonth), [selectedMonth]);
+  const monthChoices = useMemo(() => [-1, 0, 1].map(offset => {
+    const key = shiftMonthKey(currentMonth, offset);
+    return { key, label: monthLabel(key), relative: offset === -1 ? 'Previous month' : offset === 0 ? 'Current month' : 'Next month' };
+  }), [currentMonth]);
+  const visibleDays = loadedMonth === selectedMonth ? (student?.days || {}) : {};
+  const summaryMonthIsCurrent = selectedMonth === currentMonth;
   const isDateLocked = date => locked(date, messRules, closedDays);
-  const total = useMemo(() => student ? billable(student.days) : 0, [student]);
+  const total = useMemo(() => student && loadedMonth === selectedMonth ? billable(student.days, dates) : null, [student, loadedMonth, selectedMonth, dates]);
   const selectedRangeDates = rangeStart && rangeEnd
     ? dates.filter(date => date >= rangeStart && date <= rangeEnd)
     : [];
-  const rangeReady = selectedRangeDates.length >= 2 && selectedRangeDates.every(date => !isDateLocked(date));
+  const rangeReady = !monthLoading && loadedMonth === selectedMonth && selectedRangeDates.length >= 2 && selectedRangeDates.every(date => !isDateLocked(date));
 
   useEffect(() => () => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
+  }, []);
+
+  useEffect(() => {
+    if (!monthPickerOpen) return undefined;
+    const closeOnOutsideClick = event => {
+      if (monthPickerRef.current && !monthPickerRef.current.contains(event.target)) setMonthPickerOpen(false);
+    };
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setMonthPickerOpen(false);
+    };
+    window.addEventListener('mousedown', closeOnOutsideClick);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('mousedown', closeOnOutsideClick);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [monthPickerOpen]);
+
+  useEffect(() => {
+    if (window.location.pathname.replace(/\/+$/, '') !== '/reset-password') return undefined;
+    if (!supabase) {
+      setRecoveryStatus('invalid');
+      return undefined;
+    }
+
+    const params = new URLSearchParams(`${window.location.search.slice(1)}&${window.location.hash.slice(1)}`);
+    if (params.has('error') || params.has('error_code')) {
+      setRecoveryStatus('invalid');
+      return undefined;
+    }
+    if (window.sessionStorage.getItem(passwordRecoveryStorageKey) === 'true') {
+      setRecoveryStatus('ready');
+      return undefined;
+    }
+
+    let active = true;
+    const timeoutId = window.setTimeout(() => {
+      if (active) setRecoveryStatus('invalid');
+    }, 10000);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active || event !== 'PASSWORD_RECOVERY' || !session) return;
+      window.clearTimeout(timeoutId);
+      setRecoveryStatus('ready');
+      setRecoveryError('');
+    });
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -281,15 +396,12 @@ export default function App() {
         .eq('user_id', auth.user.id)
         .single();
       if (profileError) throw profileError;
-
-      const { data: mealRows, error: mealError } = await supabase
-        .from('meal_days')
-        .select('meal_date,meal_code')
-        .eq('student_id', profile.id)
-        .gte('meal_date', '2026-11-01')
-        .lte('meal_date', '2026-11-30')
-        .order('meal_date');
-      if (mealError) throw mealError;
+      const loginMonth = getCurrentMonthKey();
+      monthRequestRef.current += 1;
+      setCurrentMonth(loginMonth);
+      setSelectedMonth(loginMonth);
+      setLoadedMonth('');
+      setMonthLoading(true);
 
       const { data: notificationRows, error: notificationReadError } = await supabase
         .from('student_notifications')
@@ -298,15 +410,12 @@ export default function App() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      const [settingsResult, closedDaysResult] = await Promise.all([
+      const [monthData, settingsResult] = await Promise.all([
+        fetchStudentMonthData(profile.id, profile.tenant_id, loginMonth),
         supabase.from('mess_settings').select('lock_days_before,lock_time,timezone').eq('tenant_id', profile.tenant_id).maybeSingle(),
-        supabase.from('mess_calendar').select('calendar_date,status').eq('tenant_id', profile.tenant_id)
-          .gte('calendar_date', '2026-11-01').lte('calendar_date', '2026-11-30'),
       ]);
       if (settingsResult.error) throw settingsResult.error;
-      if (closedDaysResult.error) throw closedDaysResult.error;
 
-      const days = Object.fromEntries(mealRows.map(row => [row.meal_date, row.meal_code.trim()]));
       setStudent({
         id: profile.account_number,
         name: profile.full_name,
@@ -322,13 +431,15 @@ export default function App() {
         guardianMobileNumber: profile.guardian_mobile_number,
         bloodGroup: profile.blood_group,
         foodPreference: profile.food_preference,
-        days,
+        days: monthData.days,
         studentId: profile.id,
+        tenantId: profile.tenant_id,
       });
+      setLoadedMonth(loginMonth);
       setNotifications(notificationReadError ? [] : (notificationRows || []));
       setNotificationError('');
       setMessRules(settingsResult.data || { lock_days_before: 1, lock_time: '19:00:00', timezone: 'Asia/Kolkata' });
-      setClosedDays(Object.fromEntries((closedDaysResult.data || []).map(day => [day.calendar_date, day.status])));
+      setClosedDays(monthData.closedDays);
       if (!profile.food_preference) setFoodOpen(true);
     } catch (loginError) {
       setError(loginError.message === 'Invalid login credentials'
@@ -336,79 +447,97 @@ export default function App() {
         : loginError.message || 'Unable to sign in.');
     } finally {
       setBusy(false);
+      setMonthLoading(false);
+    }
+  }
+
+  async function selectMonth(monthKey) {
+    setMonthPickerOpen(false);
+    if (!student || !supabase || !monthChoices.some(month => month.key === monthKey)) return;
+    if (monthKey === selectedMonth && (loadedMonth === selectedMonth || monthLoading)) return;
+    const requestId = monthRequestRef.current + 1;
+    monthRequestRef.current = requestId;
+    setSelectedMonth(monthKey);
+    setLoadedMonth('');
+    setMonthLoading(true);
+    setClosedDays({});
+    setSelected(null);
+    setSummaryModal('');
+    setRangeStart(null);
+    setRangeEnd(null);
+    setRangeError('');
+    dismissNotice();
+    try {
+      const monthData = await fetchStudentMonthData(student.studentId, student.tenantId, monthKey);
+      if (monthRequestRef.current !== requestId) return;
+      setStudent(current => current ? { ...current, days: monthData.days } : current);
+      setClosedDays(monthData.closedDays);
+      setLoadedMonth(monthKey);
+    } catch (monthError) {
+      if (monthRequestRef.current === requestId) showNotice(monthError.message || 'Unable to load this month.');
+    } finally {
+      if (monthRequestRef.current === requestId) setMonthLoading(false);
     }
   }
 
   function openForgotPassword() {
     setError('');
-    setForgotAccountNumber(acc);
-    setForgotAdmissionNumber('');
-    setForgotOtp('');
-    setForgotOtpSent(false);
-    setForgotComplete(false);
-    setForgotError('');
-    setForgotMessage('');
     setForgotMode(true);
   }
 
   function closeForgotPassword() {
-    setError('');
     setForgotMode(false);
-    setForgotOtp('');
-    setForgotOtpSent(false);
-    setForgotComplete(false);
-    setForgotError('');
-    setForgotMessage('');
   }
 
-  async function submitForgotPassword(event) {
+  useEffect(() => {
+    if (!forgotMode) return undefined;
+    const handleKeyDown = event => {
+      if (event.key === 'Escape') closeForgotPassword();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [forgotMode]);
+
+  async function submitRecoveredPassword(event) {
     event.preventDefault();
-    setForgotError('');
-    setForgotMessage('');
+    setRecoveryError('');
+    if (recoveryStatus !== 'ready') {
+      setRecoveryError('Open the password reset link from your email first.');
+      return;
+    }
+    if (recoveryPassword.length < 6) {
+      setRecoveryError('Your new password must be at least 6 characters.');
+      return;
+    }
+    if (recoveryPassword !== confirmRecoveryPassword) {
+      setRecoveryError('The new passwords do not match.');
+      return;
+    }
     if (!supabase) {
-      setForgotError('Password reset is unavailable. Please contact the mess office.');
-      return;
-    }
-    if (!forgotAccountNumber.trim() || !forgotAdmissionNumber.trim()) {
-      setForgotError('Enter your account number and admission number.');
-      return;
-    }
-    if (forgotOtpSent && !/^\d{6}$/.test(forgotOtp.trim())) {
-      setForgotError('Enter the six-digit OTP sent to your registered email.');
+      setRecoveryError('Password recovery is unavailable. Please contact the mess office.');
       return;
     }
 
-    setForgotBusy(true);
+    setRecoveryBusy(true);
     try {
-      const action = forgotOtpSent ? 'confirm-student-password-reset' : 'request-student-password-reset';
-      const body = {
-        action,
-        accountNumber: forgotAccountNumber.trim(),
-        admissionNumber: forgotAdmissionNumber.trim(),
-        ...(forgotOtpSent ? { otp: forgotOtp.trim() } : {}),
-      };
-      const { data, error: resetError } = await supabase.functions.invoke('super-admin', { body });
-      if (resetError || data?.error) throw resetError || new Error(data.error);
-      if (forgotOtpSent) {
-        setForgotComplete(true);
-        setForgotOtp('');
-        setForgotMessage('Your password has been reset. Sign in using the default student password.');
-      } else {
-        setForgotOtpSent(true);
-        setForgotMessage('If these details match a student record with an email on file, an OTP will be sent there.');
-      }
-    } catch {
-      setForgotError(forgotOtpSent
-        ? 'Unable to verify that OTP. Check the code and try again.'
-        : 'Unable to send an OTP right now. Please try again later or contact the mess office.');
+      const { error: updateError } = await supabase.auth.updateUser({ password: recoveryPassword });
+      if (updateError) throw updateError;
+      setRecoveryPassword('');
+      setConfirmRecoveryPassword('');
+      window.sessionStorage.removeItem(passwordRecoveryStorageKey);
+      setRecoveryStatus('complete');
+      await supabase.auth.signOut().catch(() => undefined);
+    } catch (updateError) {
+      setRecoveryError(updateError.message || 'Unable to update your password. Please try again.');
     } finally {
-      setForgotBusy(false);
+      setRecoveryBusy(false);
     }
   }
 
   function openDay(date) {
+    if (monthLoading || loadedMonth !== selectedMonth) return;
     setSelected(date);
-    const value = student.days[keyOf(date)] || '----';
+    const value = mealCodeFor(student.days, date) || '----';
     setForm(Object.fromEntries(meals.map(([key]) => [
       key,
       value[['b', 'l', 't', 'd'].indexOf(key)] === key.toUpperCase(),
@@ -621,6 +750,13 @@ export default function App() {
         return;
       }
     }
+    monthRequestRef.current += 1;
+    const logoutMonth = getCurrentMonthKey();
+    setCurrentMonth(logoutMonth);
+    setSelectedMonth(logoutMonth);
+    setLoadedMonth('');
+    setMonthLoading(false);
+    setMonthPickerOpen(false);
     setStudent(null);
     setNotifications([]);
     setSelected(null);
@@ -641,11 +777,6 @@ export default function App() {
       setRangeEnd(null);
       setRangeError('');
     }
-    if (panel === 'total-bill') {
-      const today = new Date();
-      setSummaryMonthIsCurrent(today.getFullYear() === dates[0].getFullYear()
-        && today.getMonth() === dates[0].getMonth());
-    }
     setSummaryModal(panel);
   }
 
@@ -658,6 +789,7 @@ export default function App() {
   }
 
   const pathname = window.location.pathname.replace(/\/+$/, '');
+  const isPasswordRecoveryRoute = pathname === '/reset-password';
   if (pathname === '/mess-count') return <MessCountPage />;
   if (pathname === '/students-list') return <StudentsListPage />;
   if (pathname === '/super-admin' || pathname.startsWith('/super-admin/')) {
@@ -680,77 +812,67 @@ export default function App() {
           </section>
 
           <section className="login-panel">
-            <form className="login-form" onSubmit={forgotMode ? submitForgotPassword : login}>
+            <form className="login-form" onSubmit={isPasswordRecoveryRoute ? submitRecoveredPassword : login}>
               <div className="login-heading">
-                <span className="eyebrow">{forgotMode ? 'ACCOUNT RECOVERY' : 'WELCOME BACK'}</span>
-                <h2>{forgotMode ? 'Reset your password' : 'Sign in to your mess book'}</h2>
-                <p>{forgotMode
-                  ? 'Verify your student details with an OTP sent to your registered email.'
+                <span className="eyebrow">{isPasswordRecoveryRoute ? 'ACCOUNT RECOVERY' : 'WELCOME BACK'}</span>
+                <h2>{isPasswordRecoveryRoute ? 'Choose a new password' : 'Sign in to your mess book'}</h2>
+                <p>{isPasswordRecoveryRoute
+                  ? 'Create a new password for your DigiMessBook account.'
                   : 'Manage your meals and keep your calendar up to date.'}</p>
               </div>
 
-              {forgotMode ? (
-                <>
-                  <label className="field-label" htmlFor="reset-account-number">Account Number</label>
-                  <div className="login-input-row">
-                    <Icon name="account" />
-                    <input
-                      id="reset-account-number"
-                      autoComplete="username"
-                      placeholder="Enter your account number"
-                      value={forgotAccountNumber}
-                      onChange={event => setForgotAccountNumber(event.target.value)}
-                      disabled={forgotBusy || forgotComplete}
-                    />
-                  </div>
-
-                  <label className="field-label" htmlFor="reset-admission-number">Admission Number</label>
-                  <div className="login-input-row">
-                    <Icon name="account" />
-                    <input
-                      id="reset-admission-number"
-                      autoComplete="off"
-                      placeholder="Enter your admission number"
-                      value={forgotAdmissionNumber}
-                      onChange={event => setForgotAdmissionNumber(event.target.value)}
-                      disabled={forgotBusy || forgotComplete}
-                    />
-                  </div>
-
-                  {forgotOtpSent && !forgotComplete && (
-                    <>
-                      <label className="field-label" htmlFor="reset-otp">OTP</label>
-                      <div className="login-input-row">
-                        <Icon name="lock" />
-                        <input
-                          id="reset-otp"
-                          autoComplete="one-time-code"
-                          inputMode="numeric"
-                          pattern="[0-9]{6}"
-                          maxLength={6}
-                          placeholder="Enter the six-digit OTP"
-                          value={forgotOtp}
-                          onChange={event => setForgotOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                          disabled={forgotBusy}
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  {forgotError && <p className="login-error" role="alert">{forgotError}</p>}
-                  {forgotMessage && <p className="login-success" role="status">{forgotMessage}</p>}
-                  {!forgotComplete && (
-                    <button className="primary-button login-submit" type="submit" disabled={forgotBusy}>
-                      {forgotBusy ? 'Please wait…' : forgotOtpSent ? 'Reset password' : 'Send OTP'}
-                      {!forgotBusy && <Icon name="arrow" size={20} />}
+              {isPasswordRecoveryRoute ? (
+                recoveryStatus === 'checking' ? (
+                  <p className="login-success" role="status">Checking your password reset link…</p>
+                ) : recoveryStatus === 'invalid' ? (
+                  <>
+                    <p className="login-error" role="alert">This password reset link is invalid or expired. Request a new link from the login page.</p>
+                    <p className="login-help"><button type="button" className="text-button" onClick={() => window.location.assign('/')}>Back to login</button></p>
+                  </>
+                ) : recoveryStatus === 'complete' ? (
+                  <>
+                    <p className="login-success" role="status">Your password has been updated. You can now sign in with your new password.</p>
+                    <p className="login-help"><button type="button" className="text-button" onClick={() => window.location.assign('/')}>Back to login</button></p>
+                  </>
+                ) : (
+                  <>
+                    <label className="field-label" htmlFor="recovery-password">New password</label>
+                    <div className="login-input-row">
+                      <Icon name="lock" />
+                      <input
+                        id="recovery-password"
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={6}
+                        placeholder="Choose a new password"
+                        value={recoveryPassword}
+                        onChange={event => setRecoveryPassword(event.target.value)}
+                        disabled={recoveryBusy}
+                        required
+                      />
+                    </div>
+                    <label className="field-label" htmlFor="confirm-recovery-password">Confirm new password</label>
+                    <div className="login-input-row">
+                      <Icon name="lock" />
+                      <input
+                        id="confirm-recovery-password"
+                        type="password"
+                        autoComplete="new-password"
+                        minLength={6}
+                        placeholder="Enter the new password again"
+                        value={confirmRecoveryPassword}
+                        onChange={event => setConfirmRecoveryPassword(event.target.value)}
+                        disabled={recoveryBusy}
+                        required
+                      />
+                    </div>
+                    {recoveryError && <p className="login-error" role="alert">{recoveryError}</p>}
+                    <button className="primary-button login-submit" type="submit" disabled={recoveryBusy}>
+                      {recoveryBusy ? 'Updating password…' : 'Save new password'}
+                      {!recoveryBusy && <Icon name="arrow" size={20} />}
                     </button>
-                  )}
-                  <p className="login-help">
-                    <button type="button" className="text-button" onClick={closeForgotPassword}>
-                      Back to login
-                    </button>
-                  </p>
-                </>
+                  </>
+                )
               ) : (
                 <>
                   <label className="field-label" htmlFor="account-number">Account Number</label>
@@ -795,14 +917,42 @@ export default function App() {
                   <p className="login-help">
                     Forgot password?{' '}
                     <button type="button" className="text-button" onClick={openForgotPassword}>
-                      Get Help
+                      Reset password
                     </button>
                   </p>
+                  <div className="demo-note">
+                    <span>Default password is your <strong>Admission number</strong> in full caps.</span>
+                    <span>If no admission number is on file, contact the mess admin for the initial password.</span>
+                    <span className="demo-note-reminder">Change your password after your first login.</span>
+                  </div>
                 </>
               )}
             </form>
           </section>
         </div>
+        {forgotMode && (
+          <div className="modal-backdrop forgot-password-backdrop" onMouseDown={event => event.target === event.currentTarget && closeForgotPassword()}>
+            <section className="modal-card forgot-password-modal" role="dialog" aria-modal="true" aria-labelledby="forgot-password-title" aria-describedby="forgot-password-message">
+              <header className="modal-header">
+                <div>
+                  <span className="eyebrow">ACCOUNT SUPPORT</span>
+                  <h2 id="forgot-password-title">Forgot password?</h2>
+                </div>
+                <button type="button" className="icon-button modal-close" aria-label="Close" onClick={closeForgotPassword}><Icon name="close" /></button>
+              </header>
+              <p className="forgot-password-message" id="forgot-password-message">Automated password reset is not enabled now. Please contact Admin to reset password</p>
+              <a
+                className="primary-button login-submit forgot-password-whatsapp"
+                href="https://wa.me/919496297158?text=Hi%0AI%20want%20to%20reset%20my%20password%20!%0AMy%20name%20%20:%20%0AMy%20acc%20no%20:%20"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Contact in WhatsApp
+                <Icon name="arrow" size={20} />
+              </a>
+            </section>
+          </div>
+        )}
       </main>
     );
   }
@@ -937,9 +1087,38 @@ export default function App() {
               <div className="section-heading calendar-heading">
                 <div>
                   <span className="section-icon"><Icon name="calendar" /></span>
-                  <div><h2>Meal Calendar</h2><p>Choose a day to view or update your meals</p></div>
+                  <div><h2>Meal Calendar</h2><p>{monthLoading ? `Loading ${monthLabel(selectedMonth)}…` : 'Choose a day to view or update your meals'}</p></div>
                 </div>
-                <span className="month-pill">November 2026</span>
+                <div className="month-picker" ref={monthPickerRef}>
+                  <button
+                    type="button"
+                    className="month-pill"
+                    aria-haspopup="menu"
+                    aria-expanded={monthPickerOpen}
+                    aria-label={`Selected month: ${monthLabel(selectedMonth)}. Change month`}
+                    onClick={() => setMonthPickerOpen(value => !value)}
+                  >
+                    <span>{monthLabel(selectedMonth)}</span>
+                    <Icon name="chevron" size={17} className="month-pill-chevron" />
+                  </button>
+                  {monthPickerOpen && (
+                    <div className="month-options" role="menu" aria-label="Choose calendar month">
+                      {monthChoices.map(option => (
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={selectedMonth === option.key}
+                          className={`month-option ${selectedMonth === option.key ? 'is-selected' : ''}`}
+                          key={option.key}
+                          onClick={() => selectMonth(option.key)}
+                        >
+                          <span>{option.label}</span>
+                          <small>{option.relative}</small>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="calendar-weekdays" aria-hidden="true">
@@ -947,22 +1126,24 @@ export default function App() {
               </div>
               <div className="calendar-days">
                 {Array(dates[0].getDay()).fill(0).map((_, index) => <span className="calendar-empty" key={`empty-${index}`} />)}
-                {dates.map((date, index) => {
-                  const v = student.days[keyOf(date)] || '----';
+                {dates.map(date => {
+                  const v = mealCodeFor(visibleDays, date);
                   const cut = v === '----';
-                  const prevCut = index > 0 && (student.days[keyOf(dates[index - 1])] || '') === '----';
-                  const nextCut = index < dates.length - 1 && (student.days[keyOf(dates[index + 1])] || '') === '----';
+                  const prevCut = mealCodeFor(visibleDays, shiftDate(date, -1)) === '----';
+                  const nextCut = mealCodeFor(visibleDays, shiftDate(date, 1)) === '----';
                   const adj = cut && (prevCut || nextCut);
+                  const dotColor = v === null ? '#cbd5ce' : cut ? (adj ? '#d22' : '#f1ca28') : '#4caf50';
                   return (
                     <button
                       type="button"
                       key={keyOf(date)}
                       className={`day ${isDateLocked(date) ? 'locked' : ''} ${isToday(date) ? 'is-today' : ''} ${selected && keyOf(selected) === keyOf(date) ? 'is-selected' : ''}`}
+                      disabled={monthLoading || loadedMonth !== selectedMonth}
                       aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${isDateLocked(date) ? ', locked' : ''}`}
                       onClick={() => openDay(date)}
                     >
                       <span>{date.getDate()}</span>
-                      <i className="day-dot" style={{ background: cut ? (adj ? '#d22' : '#f1ca28') : '#4caf50' }} />
+                      <i className="day-dot" style={{ background: dotColor }} />
                     </button>
                   );
                 })}
@@ -972,6 +1153,7 @@ export default function App() {
                 <span><i className="legend-dot present" />Meals selected</span>
                 <span><i className="legend-dot single-cut" />Single mess cut</span>
                 <span><i className="legend-dot adjacent-cut" />Adjacent mess cuts</span>
+                <span><i className="legend-dot no-data" />No meal data</span>
               </div>
           </section>
 
@@ -979,13 +1161,13 @@ export default function App() {
             <section className="surface-card summary-card" aria-labelledby="summary-title">
               <div className="summary-heading">
                 <span className="summary-heading-icon"><Icon name="calendar" size={42} /></span>
-                <h2 id="summary-title">Mess Summary <span>– November at a glance</span></h2>
+                <h2 id="summary-title">Mess Summary <span>– {monthLabel(selectedMonth)} at a glance</span></h2>
               </div>
               <div className="summary-items">
                 <button type="button" className="summary-item summary-billable" onClick={goToCalendar}>
                   <span className="summary-item-icon"><Icon name="lunch" size={38} /></span>
                   <span className="summary-item-divider" />
-                  <span className="summary-item-copy"><b>{total}</b><span>Billable Days</span></span>
+                  <span className="summary-item-copy"><b>{total ?? '—'}</b><span>Billable Days</span></span>
                   <Icon name="chevron" className="summary-item-chevron" size={30} />
                 </button>
                 <button type="button" className="summary-item summary-extras" onClick={() => openSummaryModal('extra-dishes')}>
@@ -1118,7 +1300,7 @@ export default function App() {
             <header className="modal-header">
               <span className="section-icon"><Icon name={summaryModal === 'total-bill' ? 'receipt' : summaryModal === 'multiple-days' ? 'calendar' : 'cloche'} /></span>
               <div>
-                <span className="eyebrow">NOVEMBER 2026</span>
+                <span className="eyebrow">{monthLabel(selectedMonth).toUpperCase()}</span>
                 <h2 id="summary-modal-title">{summaryModal === 'extra-dishes' ? 'Extra Dishes' : summaryModal === 'total-bill' ? 'Total Bill' : 'Update Multiple Days'}</h2>
               </div>
               <button type="button" className="icon-button modal-close" aria-label="Close summary details" disabled={summaryModal === 'multiple-days' && savingRange} onClick={closeSummaryModal}><Icon name="close" /></button>
@@ -1128,18 +1310,18 @@ export default function App() {
               <div className="summary-empty-state">
                 <span className="summary-empty-icon"><Icon name="cloche" size={29} /></span>
                 <h3>No extra dishes recorded</h3>
-                <p>Extra dish selections for November 2026 will appear here.</p>
+                <p>Extra dish selections for {monthLabel(selectedMonth)} will appear here.</p>
               </div>
             )}
 
             {summaryModal === 'total-bill' && (
               <div className="summary-bill-details">
-                <div className="summary-bill-amount"><span>Total for November</span><b>{summaryMonthIsCurrent ? 'N/A' : 'Not uploaded'}</b></div>
+                <div className="summary-bill-amount"><span>Total for {monthLabel(selectedMonth)}</span><b>{summaryMonthIsCurrent ? 'N/A' : 'Not uploaded'}</b></div>
                 {summaryMonthIsCurrent ? (
                   <p className="summary-bill-message">Bill not generated yet</p>
                 ) : (
                   <div className="summary-empty-state summary-bill-empty">
-                    <p>No bill has been uploaded for November 2026 yet. The bill split-up will appear here when available.</p>
+                    <p>No bill has been uploaded for {monthLabel(selectedMonth)} yet. The bill split-up will appear here when available.</p>
                   </div>
                 )}
               </div>
@@ -1170,7 +1352,7 @@ export default function App() {
                         type="button"
                         key={keyOf(date)}
                         className={`range-day ${unavailable ? 'is-locked' : ''} ${isStart ? 'is-start' : ''} ${isEnd ? 'is-end' : ''} ${isInRange ? 'is-in-range' : ''}`}
-                        disabled={unavailable || savingRange}
+                        disabled={unavailable || savingRange || monthLoading || loadedMonth !== selectedMonth}
                         aria-pressed={isStart || isEnd || isInRange}
                         aria-label={`${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${unavailable ? ', locked' : ''}`}
                         onClick={() => chooseRangeDate(date)}

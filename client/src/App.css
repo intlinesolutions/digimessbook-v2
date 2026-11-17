@@ -163,6 +163,9 @@ svg { flex: 0 0 auto; }
 .login-success { margin: 14px 0 0; color: #176c23; font-size: 13px; line-height: 1.5; }
 .login-submit { width: 100%; min-height: 58px; margin-top: 25px; border-radius: 15px; font-size: 16px; }
 .login-help { margin: 20px 0; color: #45554b; font-size: 14px; text-align: center; }
+.demo-note { display: grid; gap: 3px; padding: 13px 15px; border: 1px solid #e4eee0; border-radius: 13px; background: #f7fbf4; color: #657266; font-size: 12px; }
+.demo-note b { margin-bottom: 2px; color: var(--green-900); font-size: 12px; }
+.demo-note-reminder { margin-top: 7px; }
 
 /* Signed-in dashboard and navigation */
 .app-shell { display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 100svh; background: #f7f9f6; }
@@ -234,7 +237,14 @@ svg { flex: 0 0 auto; }
 .section-icon { display: inline-grid; flex: 0 0 auto; width: 44px; height: 44px; place-items: center; border-radius: 14px; background: #edf8e7; color: var(--green-900); }
 .section-heading h2 { margin: 0; color: #18261d; font-size: 17px; font-weight: 750; letter-spacing: -.3px; }
 .section-heading p { margin: 5px 0 0; color: #7b877d; font-size: 12px; }
-.month-pill { flex: 0 0 auto; padding: 9px 13px; border-radius: 12px; background: #eff8e9; color: var(--green-950); font-size: 13px; font-weight: 750; }
+.month-picker { position: relative; flex: 0 0 auto; }
+.month-pill { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 9px 13px; border-radius: 12px; background: #eff8e9; color: var(--green-950); font-size: 15px; font-weight: 750; white-space: nowrap; }
+.month-pill-chevron { transform: rotate(90deg); }
+.month-options { position: absolute; top: calc(100% + 8px); right: 0; z-index: 25; display: grid; width: min(236px, calc(100vw - 32px)); padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 14px 34px #1c32201c; }
+.month-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 43px; padding: 8px 10px; border-radius: 9px; background: transparent; color: #26372b; text-align: left; }
+.month-option > span { font-size: 13px; font-weight: 700; }
+.month-option small { color: #7a877d; font-size: 10px; white-space: nowrap; }
+.month-option:hover, .month-option.is-selected { background: #eff8e9; color: var(--green-900); }
 .calendar-weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; }
 .calendar-weekdays { margin: 26px 0 6px; color: #68756c; font-size: 12px; font-weight: 650; text-align: center; }
 .calendar-weekdays span { padding: 4px 0; }
@@ -253,6 +263,7 @@ svg { flex: 0 0 auto; }
 .legend-dot.present { background: #4caf50; }
 .legend-dot.single-cut { background: #f1ca28; }
 .legend-dot.adjacent-cut { background: #d22; }
+.legend-dot.no-data { background: #cbd5ce; }
 .dashboard-lower-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); align-items: start; gap: 20px; margin-top: 20px; }
 .dashboard-secondary-column { display: grid; align-content: start; gap: 16px; min-width: 0; }
 .preference-card { padding: 20px; }
@@ -465,7 +476,10 @@ svg { flex: 0 0 auto; }
   .section-icon { width: 39px; height: 39px; border-radius: 12px; }
   .section-heading h2 { font-size: 15px; }
   .section-heading p { max-width: 205px; font-size: 11px; }
-  .month-pill { align-self: center; padding: 8px 9px; font-size: 11px; white-space: nowrap; }
+  .calendar-heading > div { min-width: 0; }
+  .calendar-heading > div > div { min-width: 0; }
+  .month-pill { align-self: center; gap: 5px; padding: 8px 8px; font-size: 13px; white-space: nowrap; }
+  .month-pill-chevron { width: 14px; height: 14px; }
   .calendar-weekdays { margin-top: 18px; font-size: 11px; }
   .calendar-days { gap: 2px; }
   .calendar-empty { min-height: 48px; }
@@ -515,10 +529,13 @@ svg { flex: 0 0 auto; }
   .login-input-row { min-height: 55px; }
   .login-input-row input { height: 51px; font-size: 14px; }
   .login-submit { min-height: 55px; margin-top: 21px; }
+  .demo-note { margin-top: 16px; }
 }
 
 @media (max-width: 370px) {
-  .month-pill { padding-inline: 7px; font-size: 10px; }
+  .calendar-heading { flex-wrap: wrap; }
+  .month-picker { margin-left: auto; }
+  .month-pill { padding-inline: 8px; font-size: 12px; }
   .calendar-card { padding-inline: 9px; }
   .calendar-weekdays { font-size: 10px; }
   .calendar-days { gap: 0; }
@@ -536,4 +553,14 @@ svg { flex: 0 0 auto; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+.forgot-password-backdrop { z-index: 70; align-items: center; padding: 20px; }
+.forgot-password-modal { width: min(100%, 440px); max-height: min(90svh, 520px); padding: 25px; border-radius: 22px; }
+.forgot-password-message { margin: 22px 0 0; color: #526157; font-size: 15px; line-height: 1.6; }
+.forgot-password-whatsapp { width: 100%; margin-top: 24px; text-decoration: none; }
+
+@media (max-width: 760px) {
+  .forgot-password-backdrop { align-items: center; padding: 20px; }
+  .forgot-password-modal { width: min(100%, 440px); padding: 23px; border-radius: 22px; }
 }
