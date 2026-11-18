@@ -813,7 +813,7 @@ export default function App() {
               <div className="login-heading">
                 <span className="eyebrow">{isPasswordRecoveryRoute ? 'ACCOUNT RECOVERY' : 'WELCOME BACK'}</span>
                 <h2>{isPasswordRecoveryRoute ? 'Choose a new password' : 'Sign in to your mess book'}</h2>
-                <p>{isPasswordRecoveryRoute
+                <p className={isPasswordRecoveryRoute ? undefined : 'login-tagline'}>{isPasswordRecoveryRoute
                   ? 'Create a new password for your DigiMessBook account.'
                   : 'Manage your meals and keep your calendar up to date.'}</p>
               </div>
@@ -987,10 +987,10 @@ export default function App() {
             <Icon name="cloche" /><span>Food Preference</span>
           </button>
           <span className="nav-label nav-label-spaced">DASHBOARDS</span>
-          <a className="nav-item nav-link" href="/mess-count" onClick={() => setDrawerOpen(false)}>
+          <a className="nav-item nav-link" href="/mess-count" target="_blank" rel="noopener noreferrer" onClick={() => setDrawerOpen(false)}>
             <Icon name="calendar" /><span>Mess Count</span>
           </a>
-          <a className="nav-item nav-link" href="/students-list" onClick={() => setDrawerOpen(false)}>
+          <a className="nav-item nav-link" href="/students-list" target="_blank" rel="noopener noreferrer" onClick={() => setDrawerOpen(false)}>
             <Icon name="user" /><span>Students List</span>
           </a>
           <span className="nav-label nav-label-spaced">SUPPORT</span>
@@ -1022,7 +1022,7 @@ export default function App() {
             <span className="mobile-brand"><Icon name="cloche" size={23} />DigiMessBook</span>
             <span className="topbar-context">Student dashboard</span>
             <div className="notification-wrap">
-              <button type="button" className="icon-button notification-button" aria-label={`Notifications${notifications.some(item => !item.read_at) ? `, ${notifications.filter(item => !item.read_at).length} unread` : ''}`} aria-expanded={notificationsOpen} onClick={async () => {
+              <button type="button" className={`icon-button notification-button ${notifications.some(item => !item.read_at) && !notificationsOpen ? 'has-unread' : ''}`} aria-label={`Notifications${notifications.some(item => !item.read_at) ? `, ${notifications.filter(item => !item.read_at).length} unread` : ''}`} aria-expanded={notificationsOpen} onClick={async () => {
                 const opening = !notificationsOpen;
                 setNotificationsOpen(opening);
                 setNotificationError('');
@@ -1045,7 +1045,7 @@ export default function App() {
                 }
               }}>
                 <Icon name="bell" />
-                {notifications.some(item => !item.read_at) && <i />}
+                {notifications.some(item => !item.read_at) && !notificationsOpen && <i />}
               </button>
               {notificationsOpen && (
                 <div className="notification-popover" role="status" aria-label="Your notifications">

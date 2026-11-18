@@ -197,7 +197,16 @@ svg { flex: 0 0 auto; }
 .topbar-context { color: #637066; font-size: 13px; font-weight: 650; }
 .notification-wrap { position: relative; margin-left: auto; }
 .notification-button { position: relative; }
-.notification-button i { position: absolute; top: 9px; right: 9px; width: 7px; height: 7px; border: 1.5px solid #fff; border-radius: 50%; background: #4caf50; }
+.notification-button.has-unread > svg { transform-box: fill-box; transform-origin: 50% 10%; animation: notification-ring 2.2s ease-in-out infinite; }
+.notification-button i { position: absolute; top: 6px; right: 6px; width: 11px; height: 11px; border: 1.5px solid #fff; border-radius: 50%; background: #4caf50; }
+@keyframes notification-ring {
+  0%, 26%, 100% { transform: rotate(0deg); }
+  4% { transform: rotate(11deg); }
+  8% { transform: rotate(-10deg); }
+  12% { transform: rotate(8deg); }
+  16% { transform: rotate(-5deg); }
+  21% { transform: rotate(3deg); }
+}
 .notification-popover { position: absolute; top: 50px; right: 0; z-index: 20; width: 260px; padding: 17px; border: 1px solid var(--line); border-radius: 15px; background: #fff; box-shadow: 0 14px 34px #1c32201c; }
 .notification-popover b { color: var(--ink); font-size: 14px; }
 .notification-popover p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -553,6 +562,7 @@ svg { flex: 0 0 auto; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  .notification-button.has-unread > svg { animation: none; }
 }
 
 .forgot-password-backdrop { z-index: 70; align-items: center; padding: 20px; }
