@@ -4,7 +4,8 @@ on conflict (slug) do nothing;
 insert into public.hostels (id, tenant_id, name)
 values
  ('20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','MH 1'),
- ('20000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000001','MH 2')
+ ('20000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000001','MH 2'),
+ ('20000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000001','MH 3')
 on conflict (id) do update set name=excluded.name;
 
 insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
@@ -23,6 +24,27 @@ on conflict (id) do nothing;
 insert into auth.identities (id, user_id, identity_data, provider, provider_id, created_at, updated_at)
 select id, id, jsonb_build_object('sub', id::text, 'email', email, 'email_verified', true), 'email', email, now(), now()
 from auth.users where email in ('24b000@demo.digimessbook.local','24b001@demo.digimessbook.local','24b002@demo.digimessbook.local','24b003@demo.digimessbook.local','24b004@demo.digimessbook.local')
+on conflict (provider_id, provider) do nothing;
+
+-- Local mess-admin demo accounts. Their trusted app metadata defines the hostels
+-- enforced by the mess-admin Edge Function.
+insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+  email_confirmed_at, confirmation_token, recovery_token, email_change_token_new, email_change,
+  email_change_token_current, phone_change, phone_change_token, reauthentication_token,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at, is_sso_user, is_anonymous)
+values
+ ('30000000-0000-4000-8000-000000000006','00000000-0000-0000-0000-000000000000','authenticated','authenticated','messadmin-mh1@demo.digimessbook.local',extensions.crypt('Mess@026',extensions.gen_salt('bf')),now(),'','','','','','','','','{"provider":"email","providers":["email"],"role":"mess_admin","mess_admin_hostels":["MH 1"]}'::jsonb,'{"full_name":"Mess Admin MH 1"}'::jsonb,now(),now(),false,false),
+ ('30000000-0000-4000-8000-000000000007','00000000-0000-0000-0000-000000000000','authenticated','authenticated','messadmin-mh2@demo.digimessbook.local',extensions.crypt('Mess@026',extensions.gen_salt('bf')),now(),'','','','','','','','','{"provider":"email","providers":["email"],"role":"mess_admin","mess_admin_hostels":["MH 2"]}'::jsonb,'{"full_name":"Mess Admin MH 2"}'::jsonb,now(),now(),false,false),
+ ('30000000-0000-4000-8000-000000000008','00000000-0000-0000-0000-000000000000','authenticated','authenticated','messadmin-mh3@demo.digimessbook.local',extensions.crypt('Mess@026',extensions.gen_salt('bf')),now(),'','','','','','','','','{"provider":"email","providers":["email"],"role":"mess_admin","mess_admin_hostels":["MH 3"]}'::jsonb,'{"full_name":"Mess Admin MH 3"}'::jsonb,now(),now(),false,false),
+ ('30000000-0000-4000-8000-000000000009','00000000-0000-0000-0000-000000000000','authenticated','authenticated','messadmin-all@demo.digimessbook.local',extensions.crypt('Mess@026',extensions.gen_salt('bf')),now(),'','','','','','','','','{"provider":"email","providers":["email"],"role":"mess_admin","mess_admin_hostels":["MH 1","MH 2","MH 3"]}'::jsonb,'{"full_name":"Mess Admin All Hostels"}'::jsonb,now(),now(),false,false)
+on conflict (id) do nothing;
+
+insert into auth.identities (id, user_id, identity_data, provider, provider_id, created_at, updated_at)
+select id, id, jsonb_build_object('sub', id::text, 'email', email, 'email_verified', true), 'email', email, now(), now()
+from auth.users where email in (
+  'messadmin-mh1@demo.digimessbook.local', 'messadmin-mh2@demo.digimessbook.local',
+  'messadmin-mh3@demo.digimessbook.local', 'messadmin-all@demo.digimessbook.local'
+)
 on conflict (provider_id, provider) do nothing;
 
 insert into public.students (user_id, tenant_id, hostel_id, account_number, full_name, room, academic_year, food_preference)

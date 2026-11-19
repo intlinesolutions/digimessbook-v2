@@ -66,3 +66,34 @@ Notifications are stored for each selected student, appear in the student app's 
 The student dashboard month picker shows the previous, current, and next month, with the current month selected at login. A monthly Supabase Cron job removes `meal_days` and `mess_calendar` rows older than the previous month, keeping the previous, current, and next month available. Student profiles and audit history are retained.
 
 The local demo users and their data remain local unless you apply migrations or seed data to another project deliberately.
+
+## Mess-admin dashboard
+
+The read-only mess-admin workspace is available at `/mess-admin`. Its demo users are created by the local seed and are scoped to hostels in trusted Supabase Auth app metadata:
+
+| Username | Hostel access |
+|---|---|
+| `messadmin-mh1` | MH 1 |
+| `messadmin-mh2` | MH 2 |
+| `messadmin-mh3` | MH 3 |
+| `messadmin-all` | MH 1, MH 2, and MH 3 |
+
+The local demo password for these four accounts is `Mess@026`. Reset the local database with `npx supabase db reset` to create the accounts and apply the service-role read grants. Deploy the scoped read endpoint alongside the existing super-admin function:
+
+```powershell
+npx supabase db push
+npx supabase functions deploy mess-admin
+```
+
+For an existing local Supabase stack, apply the pending migrations and load the local fixtures with `npx supabase migration up` followed by `npx supabase db seed`. The seed command re-applies the demo fixture data in `supabase/seed.sql`.
+
+Local Vite development uses a server-only middleware in `client/vite-mess-admin.js` for scoped reads when the Supabase Edge Functions runtime is not running. It reads the service-role key from the ignored `supabase/.env.local` file and never sends that key to the browser. Hosted builds use the `mess-admin` Edge Function instead.
+
+For a hosted project, create dedicated Supabase Auth users with the internal email alias `username@demo.digimessbook.local` and set each user's **app metadata** to `{"role":"mess_admin","mess_admin_hostels":["MH 1"]}` (use only the hostels assigned to that account). The `mess-admin` Edge Function checks this metadata on every request and returns only records for those hostels. Do not use the local shared demo password for hosted accounts.
+
+Mess-admin shortcuts open `/mess-count` and `/students-list` in a new tab and use the scoped endpoint while a mess-admin session is active. Student profiles, calendars, and the current bill status are read-only. The existing student app has no uploaded bill records yet, so bill details show billable days and “Not generated” until a bill is added later.
+
+The mess-admin home page's attendance cards and seven-day chart use scoped `meal_days` records. Extras amounts and fines show “Not tracked” until those ledgers are added; total days is the calendar-day count for the current month.
+The attendance chart shows two days before today through four days ahead, with today highlighted. On mobile, the action navigation opens as a 75%-width side drawer.
+
+Mess admins can open `/mess-admin/days-download` to review scoped student billable days for the previous, current, or next month. Downloads are enabled only for a past month; student filters and ordered multi-column sorting apply to the Excel and PDF exports. Fined days and extras total remain `NA` until those ledgers are available.

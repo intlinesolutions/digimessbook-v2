@@ -9,6 +9,10 @@ project_id = "DigiMessBook"
 # are also handled here, so the Edge gateway must allow requests without a user JWT.
 verify_jwt = false
 
+[functions.mess-admin]
+# This endpoint performs its own role and hostel-scope checks for every read request.
+verify_jwt = true
+
 [api]
 enabled = true
 # Port to use for the API URL.
