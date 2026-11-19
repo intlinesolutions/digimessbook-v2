@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from './supabase';
+import { invokeMessAdmin } from './messAdminApi';
 import './StudentsListPage.css';
 
 function getTodayInIndia() {
@@ -22,6 +23,7 @@ export default function StudentsListPage() {
   const [search, setSearch] = useState('');
   const [loadingHostels, setLoadingHostels] = useState(true);
   const [loadingStudents, setLoadingStudents] = useState(false);
+  const [messAdminMode, setMessAdminMode] = useState(false);
   const [error, setError] = useState('');
   const requestId = useRef(0);
 
@@ -36,6 +38,20 @@ export default function StudentsListPage() {
       }
 
       try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData.session?.user?.app_metadata?.role === 'mess_admin') {
+          setMessAdminMode(true);
+          const { data: scope, error: scopeError } = await invokeMessAdmin(supabase, 'scope');
+          if (scopeError) {
+            let message = scopeError.message || 'Unable to load your hostel access.';
+            try { message = (await scopeError.context?.json())?.error || message; } catch { /* keep default */ }
+            throw new Error(message);
+          }
+          if (!active) return;
+          setHostels(scope?.hostels || []);
+          if (!scope?.hostels?.length) setError('No hostels are assigned to this account.');
+          return;
+        }
         const { data, error: queryError } = await supabase.rpc('mess_count_hostels');
         if (!active) return;
 
@@ -70,10 +86,22 @@ export default function StudentsListPage() {
     setLoadingStudents(true);
 
     try {
-      const { data, error: queryError } = await supabase.rpc('students_list_rows', {
-        p_hostel: hostelId,
-        p_date: date,
-      });
+      let data;
+      let queryError;
+      if (messAdminMode) {
+        const result = await invokeMessAdmin(supabase, 'students-list', { hostelId, date });
+        if (result.error) {
+          let message = result.error.message || 'Unable to load the students list.';
+          try { message = (await result.error.context?.json())?.error || message; } catch { /* keep default */ }
+          queryError = { message };
+        } else {
+          data = result.data?.students || [];
+        }
+      } else {
+        const result = await supabase.rpc('students_list_rows', { p_hostel: hostelId, p_date: date });
+        data = result.data;
+        queryError = result.error;
+      }
 
       if (currentRequest !== requestId.current) return;
       if (queryError) {

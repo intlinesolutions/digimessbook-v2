@@ -4,6 +4,7 @@ import { passwordRecoveryStorageKey, supabase } from './supabase';
 import MessCountPage from './MessCountPage.jsx';
 import StudentsListPage from './StudentsListPage.jsx';
 const SuperAdminPage = lazy(() => import('./SuperAdminPage.jsx'));
+const MessAdminPage = lazy(() => import('./MessAdminPage.jsx'));
 
 const meals = [
   ['b', 'Breakfast', 'coffee'],
@@ -789,6 +790,9 @@ export default function App() {
   const isPasswordRecoveryRoute = pathname === '/reset-password';
   if (pathname === '/mess-count') return <MessCountPage />;
   if (pathname === '/students-list') return <StudentsListPage />;
+  if (pathname === '/mess-admin' || pathname.startsWith('/mess-admin/')) {
+    return <Suspense fallback={<main className="sa-gate"><p>Loading mess-admin dashboard…</p></main>}><MessAdminPage /></Suspense>;
+  }
   if (pathname === '/super-admin' || pathname.startsWith('/super-admin/')) {
     return <Suspense fallback={<main className="sa-gate"><p>Loading super-admin workspace…</p></main>}><SuperAdminPage /></Suspense>;
   }

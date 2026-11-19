@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from './supabase';
+import { invokeMessAdmin } from './messAdminApi';
 import './MessCountPage.css';
 
 const BOTH_HOSTELS = 'both-hostels';
+const ALL_ACCESSIBLE_HOSTELS = 'all-accessible';
 const preferences = [
   ['chicken', 'Chicken'],
   ['fish', 'Fish'],
@@ -222,6 +224,7 @@ export default function MessCountPage() {
   const [summary, setSummary] = useState(null);
   const [loadingHostels, setLoadingHostels] = useState(true);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [messAdminMode, setMessAdminMode] = useState(false);
   const [error, setError] = useState('');
   const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [snapshotStatus, setSnapshotStatus] = useState('');
@@ -238,6 +241,20 @@ export default function MessCountPage() {
       }
 
       try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData.session?.user?.app_metadata?.role === 'mess_admin') {
+          setMessAdminMode(true);
+          const { data: scope, error: scopeError } = await invokeMessAdmin(supabase, 'scope');
+          if (scopeError) {
+            let message = scopeError.message || 'Unable to load your hostel access.';
+            try { message = (await scopeError.context?.json())?.error || message; } catch { /* keep default */ }
+            throw new Error(message);
+          }
+          if (!active) return;
+          setHostels(scope?.hostels || []);
+          if (!scope?.hostels?.length) setError('No hostels are assigned to this account.');
+          return;
+        }
         const { data, error: queryError } = await supabase.rpc('mess_count_hostels');
         if (!active) return;
 
@@ -275,10 +292,25 @@ export default function MessCountPage() {
     setSummary(null);
     setLoadingSummary(true);
     try {
-      const { data, error: queryError } = await supabase.rpc('mess_count_summary', {
-        p_hostel: requestedHostelId === BOTH_HOSTELS ? null : requestedHostelId,
-        p_date: requestedDate,
-      });
+      let data;
+      let queryError;
+      if (messAdminMode) {
+        const result = await invokeMessAdmin(supabase, 'mess-count', { hostelId: requestedHostelId, date: requestedDate });
+        if (result.error) {
+          let message = result.error.message || 'Unable to load the mess count.';
+          try { message = (await result.error.context?.json())?.error || message; } catch { /* keep default */ }
+          queryError = { message };
+        } else {
+          data = result.data?.rows || [];
+        }
+      } else {
+        const result = await supabase.rpc('mess_count_summary', {
+          p_hostel: requestedHostelId === BOTH_HOSTELS ? null : requestedHostelId,
+          p_date: requestedDate,
+        });
+        data = result.data;
+        queryError = result.error;
+      }
 
       if (requestId !== summaryRequest.current) return;
       if (queryError) {
@@ -302,6 +334,7 @@ export default function MessCountPage() {
   }
 
   function getSnapshotHostelName(snapshot) {
+    if (messAdminMode && snapshot.hostelId === ALL_ACCESSIBLE_HOSTELS) return 'All accessible hostels';
     return snapshot.hostelId === BOTH_HOSTELS
       ? 'MH 1 & 2'
       : hostels.find(hostel => hostel.id === snapshot.hostelId)?.name || 'Hostel';
@@ -370,7 +403,10 @@ export default function MessCountPage() {
             >
               <option value="">{loadingHostels ? 'Loading hostels…' : 'Select hostel'}</option>
               {hostels.map(hostel => <option value={hostel.id} key={hostel.id}>{hostel.name}</option>)}
-              {hostels.some(hostel => hostel.name === 'MH 1') && hostels.some(hostel => hostel.name === 'MH 2') && (
+              {messAdminMode && hostels.length > 1 && (
+                <option value={ALL_ACCESSIBLE_HOSTELS}>All accessible hostels</option>
+              )}
+              {!messAdminMode && hostels.some(hostel => hostel.name === 'MH 1') && hostels.some(hostel => hostel.name === 'MH 2') && (
                 <option value={BOTH_HOSTELS}>MH 1 &amp; 2</option>
               )}
             </select>
@@ -425,7 +461,7 @@ export default function MessCountPage() {
               Snapshot requested at {formatIndiaTime(summary.requestedAt)} IST
             </p>
             <p className="mess-count-caption">
-              {summary.hostelId === BOTH_HOSTELS ? 'MH 1 & 2' : hostels.find(hostel => hostel.id === summary.hostelId)?.name} · {new Date(`${summary.date}T00:00:00Z`).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'long' })}
+              {summary.hostelId === BOTH_HOSTELS ? 'MH 1 & 2' : summary.hostelId === ALL_ACCESSIBLE_HOSTELS ? 'All accessible hostels' : hostels.find(hostel => hostel.id === summary.hostelId)?.name} · {new Date(`${summary.date}T00:00:00Z`).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'long' })}
             </p>
             <div className="mess-count-snapshot-actions">
               <button type="button" onClick={downloadSnapshot} disabled={snapshotBusy}>
