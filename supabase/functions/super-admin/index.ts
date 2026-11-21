@@ -18,7 +18,8 @@ const activityGroups: Record<string, string[]> = {
   day_status: ['day.status_changed', 'day.mess_closed', 'day.opened'],
   admin_controls: ['settings.updated', 'month.deleted'],
   notifications: ['notification.sent'],
-  student_updates: ['meal.created', 'meal.updated', 'meal.range_updated', 'student.food_preference_updated'],
+  student_updates: ['meal.created', 'meal.updated', 'meal.range_updated', 'student.food_preference_updated', 'student.password_changed', 'student.bill_charges_updated'],
+  bill_management: ['bill.created', 'bill.updated', 'bill.published', 'bill.unpublished', 'bill.deleted'],
   login: ['auth.login'],
 };
 
@@ -27,7 +28,20 @@ function reply(body: unknown, status = 200) {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const detail = error as Record<string, unknown>;
+    const message = String(detail.message || detail.error_description || detail.error || '').trim();
+    if (/schema cache/i.test(message) && /(monthly_bills|student_monthly_charges)/i.test(message)) {
+      return 'The Bill Management tables are missing from this Supabase project. Apply migration 202611210001_monthly_bills.sql, then refresh the API schema cache.';
+    }
+    const details = String(detail.details || '').trim();
+    const hint = String(detail.hint || '').trim();
+    const code = String(detail.code || '').trim();
+    return [message, details && `Details: ${details}`, hint && `Hint: ${hint}`, code && !message ? `Code: ${code}` : '']
+      .filter(Boolean).join(' · ') || JSON.stringify(error);
+  }
+  return String(error);
 }
 
 async function fetchAllRows(buildQuery: (from: number, to: number) => any) {
@@ -228,6 +242,8 @@ function buildHistoryQuery(tenantId: string, filters: Record<string, unknown>, w
       `details->>account_number.ilike.${pattern}`,
       `details->>student_name.ilike.${pattern}`,
       `details->>date.ilike.${pattern}`,
+      `details->>from_date.ilike.${pattern}`,
+      `details->>to_date.ilike.${pattern}`,
       `details->>month.ilike.${pattern}`,
     ].join(','));
   }
@@ -320,6 +336,44 @@ async function loadDashboard(tenantId: string) {
     },
     today,
   };
+}
+
+const defaultBillItems = [
+  'Establishment Charges', 'Rent', 'Amenity fund', 'Wifi', 'Common extra',
+].map((label, index) => ({ key: `default-${index + 1}`, label, amount: 0 }));
+
+function billMonthDate(value: unknown) {
+  const month = String(value || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    throw Object.assign(new Error('Choose a valid bill month.'), { status: 400 });
+  }
+  return `${month}-01`;
+}
+
+function validateBillDraft(input: Record<string, unknown>) {
+  if (!Array.isArray(input.fixedItems) || input.fixedItems.length > 50) {
+    throw Object.assign(new Error('Add between 0 and 50 fixed amount items.'), { status: 400 });
+  }
+  const fixedItems = input.fixedItems.map((item: any, index: number) => {
+    const key = String(item?.key || `custom-${index + 1}`).trim().slice(0, 80);
+    const label = String(item?.label || '').trim();
+    if (String(item?.amount ?? '').trim() === '') {
+      throw Object.assign(new Error('Enter an amount for every fixed item.'), { status: 400 });
+    }
+    const amount = Number(item?.amount);
+    if (!label || label.length > 80 || !Number.isFinite(amount) || amount < 0 || amount > 1000000000) {
+      throw Object.assign(new Error('Each fixed item needs a name up to 80 characters and a non-negative amount.'), { status: 400 });
+    }
+    return { key: key || `custom-${index + 1}`, label, amount: Math.round(amount * 100) / 100 };
+  });
+  if (String(input.dailyRate ?? '').trim() === '') {
+    throw Object.assign(new Error('Enter a daily rate.'), { status: 400 });
+  }
+  const dailyRate = Number(input.dailyRate);
+  if (!Number.isFinite(dailyRate) || dailyRate < 0 || dailyRate > 1000000000) {
+    throw Object.assign(new Error('Enter a non-negative daily rate.'), { status: 400 });
+  }
+  return { fixedItems, dailyRate: Math.round(dailyRate * 100) / 100 };
 }
 
 function validateStudent(input: Record<string, unknown>) {
@@ -478,6 +532,125 @@ async function handle(request: Request) {
     return reply({ tenants: data || [] });
   }
   if (action === 'dashboard') return reply(await loadDashboard(tenantId));
+  if (action === 'bill-months') {
+    await tenantExists(tenantId);
+    const { data, error } = await adminDb.from('monthly_bills').select('bill_month')
+      .eq('tenant_id', tenantId).order('bill_month', { ascending: false });
+    if (error) throw error;
+    return reply({ months: [...new Set((data || []).map(row => String(row.bill_month).slice(0, 7)))] });
+  }
+  if (action === 'bills-list') {
+    await tenantExists(tenantId);
+    const month = billMonthDate(body.month);
+    const { data, error } = await adminDb.from('monthly_bills')
+      .select('id,tenant_id,hostel_id,bill_month,status,fixed_items,daily_rate,published_fixed_items,published_daily_rate,created_at,last_edited_at,last_published_at,hostels(name)')
+      .eq('tenant_id', tenantId).eq('bill_month', month).order('hostel_id');
+    if (error) throw error;
+    return reply({ bills: data || [] });
+  }
+  if (action === 'bill-create') {
+    await tenantExists(tenantId);
+    const month = billMonthDate(body.month);
+    const hostelId = String(body.hostelId || '');
+    const { data: hostel, error: hostelError } = await adminDb.from('hostels').select('id,name')
+      .eq('id', hostelId).eq('tenant_id', tenantId).maybeSingle();
+    if (hostelError) throw hostelError;
+    if (!hostel) throw Object.assign(new Error('The selected hostel does not belong to this group.'), { status: 400 });
+    const { data, error } = await adminDb.from('monthly_bills').insert({
+      tenant_id: tenantId, hostel_id: hostelId, bill_month: month,
+      fixed_items: defaultBillItems, daily_rate: 0,
+      published_fixed_items: defaultBillItems, published_daily_rate: 0,
+    }).select('id,tenant_id,hostel_id,bill_month,status,fixed_items,daily_rate,published_fixed_items,published_daily_rate,created_at,last_edited_at,last_published_at,hostels(name)').single();
+    if (error?.code === '23505') throw Object.assign(new Error('A bill already exists for this hostel and month.'), { status: 409 });
+    if (error) throw error;
+    await audit(actor, tenantId, 'bill.created', { month: String(body.month), hostel: hostel.name, bill_id: data.id });
+    return reply({ bill: data });
+  }
+  if (['bill-save', 'bill-publish'].includes(action)) {
+    await tenantExists(tenantId);
+    const billId = String(body.billId || '');
+    const draft = validateBillDraft({ fixedItems: body.fixedItems, dailyRate: body.dailyRate });
+    const { data: current, error: currentError } = await adminDb.from('monthly_bills')
+      .select('id,hostel_id,bill_month,hostels(name)').eq('id', billId).eq('tenant_id', tenantId).maybeSingle();
+    if (currentError) throw currentError;
+    if (!current) throw Object.assign(new Error('Bill not found in the selected group.'), { status: 404 });
+    const updates: Record<string, unknown> = { fixed_items: draft.fixedItems, daily_rate: draft.dailyRate };
+    if (action === 'bill-publish') {
+      updates.status = 'published';
+      updates.published_fixed_items = draft.fixedItems;
+      updates.published_daily_rate = draft.dailyRate;
+      updates.last_published_at = new Date().toISOString();
+    }
+    const { data, error } = await adminDb.from('monthly_bills').update(updates).eq('id', billId).eq('tenant_id', tenantId)
+      .select('id,tenant_id,hostel_id,bill_month,status,fixed_items,daily_rate,published_fixed_items,published_daily_rate,created_at,last_edited_at,last_published_at,hostels(name)').single();
+    if (error) throw error;
+    await audit(actor, tenantId, action === 'bill-publish' ? 'bill.published' : 'bill.updated', {
+      month: String(current.bill_month).slice(0, 7), hostel: current.hostels?.name || '', bill_id: billId,
+    });
+    return reply({ bill: data });
+  }
+  if (action === 'bill-unpublish' || action === 'bill-delete') {
+    await tenantExists(tenantId);
+    const billId = String(body.billId || '');
+    const { data: current, error: currentError } = await adminDb.from('monthly_bills')
+      .select('id,hostel_id,bill_month,hostels(name)').eq('id', billId).eq('tenant_id', tenantId).maybeSingle();
+    if (currentError) throw currentError;
+    if (!current) throw Object.assign(new Error('Bill not found in the selected group.'), { status: 404 });
+    if (action === 'bill-unpublish') {
+      const { error } = await adminDb.from('monthly_bills').update({ status: 'unpublished' })
+        .eq('id', billId).eq('tenant_id', tenantId);
+      if (error) throw error;
+    } else {
+      const { error } = await adminDb.from('monthly_bills').delete().eq('id', billId).eq('tenant_id', tenantId);
+      if (error) throw error;
+    }
+    await audit(actor, tenantId, action === 'bill-unpublish' ? 'bill.unpublished' : 'bill.deleted', {
+      month: String(current.bill_month).slice(0, 7), hostel: current.hostels?.name || '', bill_id: billId,
+    });
+    return reply({ ok: true });
+  }
+  if (action === 'student-charges-get') {
+    await tenantExists(tenantId);
+    const studentId = String(body.studentId || '');
+    const month = billMonthDate(body.month);
+    const { data: student, error: studentError } = await adminDb.from('students').select('id,hostel_id')
+      .eq('id', studentId).eq('tenant_id', tenantId).maybeSingle();
+    if (studentError) throw studentError;
+    if (!student) throw Object.assign(new Error('Student not found in the selected group.'), { status: 404 });
+    const { data, error } = await adminDb.from('student_monthly_charges')
+      .select('extras_total,fine_days,fine_total').eq('student_id', studentId).eq('bill_month', month).maybeSingle();
+    if (error) throw error;
+    return reply({ charges: data || { extras_total: 0, fine_days: 0, fine_total: 0 } });
+  }
+  if (action === 'student-charges-save') {
+    await tenantExists(tenantId);
+    const studentId = String(body.studentId || '');
+    const month = billMonthDate(body.month);
+    const extrasTotal = Number(body.extrasTotal);
+    const fineDays = Number(body.fineDays);
+    const fineTotal = Number(body.fineTotal);
+    if (!Number.isFinite(extrasTotal) || extrasTotal < 0 || extrasTotal > 1000000000
+      || !Number.isInteger(fineDays) || fineDays < 0 || fineDays > 366
+      || !Number.isFinite(fineTotal) || fineTotal < 0 || fineTotal > 1000000000) {
+      throw Object.assign(new Error('Enter valid non-negative extras, fined days, and fine amount.'), { status: 400 });
+    }
+    const { data: student, error: studentError } = await adminDb.from('students').select('id,hostel_id,account_number,full_name')
+      .eq('id', studentId).eq('tenant_id', tenantId).maybeSingle();
+    if (studentError) throw studentError;
+    if (!student) throw Object.assign(new Error('Student not found in the selected group.'), { status: 404 });
+    const { data, error } = await adminDb.from('student_monthly_charges').upsert({
+      tenant_id: tenantId, hostel_id: student.hostel_id, student_id: studentId, bill_month: month,
+      extras_total: Math.round(extrasTotal * 100) / 100, fine_days: fineDays,
+      fine_total: Math.round(fineTotal * 100) / 100, updated_at: new Date().toISOString(),
+    }, { onConflict: 'student_id,bill_month' })
+      .select('extras_total,fine_days,fine_total').single();
+    if (error) throw error;
+    await audit(actor, tenantId, 'student.bill_charges_updated', {
+      month: String(body.month), account_number: student.account_number, student_name: student.full_name,
+      extras_total: data.extras_total, fine_days: data.fine_days, fine_total: data.fine_total,
+    }, studentId);
+    return reply({ charges: data });
+  }
   if (action === 'history') {
     await tenantExists(tenantId);
     const page = Math.max(1, Math.floor(Number(body.page) || 1));
@@ -493,6 +666,30 @@ async function handle(request: Request) {
     const activities = await fetchAllRows((from, to) => buildHistoryQuery(tenantId, body)
       .order('created_at', { ascending: false }).order('id').range(from, to));
     return reply({ activities: await decorateActivities(activities, tenantId) });
+  }
+  if (action === 'delete-activity-history') {
+    await tenantExists(tenantId);
+    const dateFrom = String(body.dateFrom || '');
+    const dateTo = String(body.dateTo || '');
+    const validDate = (value: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const date = new Date(`${value}T00:00:00Z`);
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    };
+    if (!validDate(dateFrom) || !validDate(dateTo)) {
+      throw Object.assign(new Error('Choose a valid start and end date.'), { status: 400 });
+    }
+    if (dateFrom > dateTo) {
+      throw Object.assign(new Error('Start date must be before or equal to end date.'), { status: 400 });
+    }
+    const exclusiveEnd = new Date(`${dateTo}T00:00:00+05:30`);
+    exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
+    const { count, error } = await adminDb.from('admin_audit_log').delete({ count: 'exact' })
+      .eq('tenant_id', tenantId)
+      .gte('created_at', `${dateFrom}T00:00:00+05:30`)
+      .lt('created_at', exclusiveEnd.toISOString());
+    if (error) throw error;
+    return reply({ ok: true, deleted: count || 0, dateFrom, dateTo });
   }
   if (action === 'day-status') {
     await tenantExists(tenantId);

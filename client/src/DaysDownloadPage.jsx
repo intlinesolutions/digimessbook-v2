@@ -9,7 +9,7 @@ const sortOptions = [
   ['account_number', 'Account no.'], ['room', 'Room no.'], ['hostel', 'Hostel'],
   ['days', 'No. of days'], ['extras', 'Extras'], ['fine', 'Fine'],
 ];
-const tableHeaders = ['Account number', 'Room no.', 'Name', 'Hostel', 'Year', 'Department', 'No. of days', 'Fined days', 'Extras total'];
+const tableHeaders = ['Account number', 'Room no.', 'Name', 'Hostel', 'Year', 'Department', 'No. of days', 'Fined days', 'Fine amount', 'Extras total'];
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 function currentMonthKey() {
@@ -56,8 +56,16 @@ function exportRow(student) {
   return [
     student.account_number || '—', student.room || '—', student.full_name || '—',
     student.hostels?.name || '—', student.academic_year || '—', student.department || '—',
-    Number(student.days || 0), student.finedDays ?? 'NA', student.extrasTotal ?? 'NA',
+    Number(student.days || 0), student.finedDays ?? 'NA', student.fineTotal ?? 'NA', student.extrasTotal ?? 'NA',
   ];
+}
+
+function messBookDayHeaders(month) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  const monthShort = new Intl.DateTimeFormat('en', { month: 'short', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, monthNumber - 1, 1)));
+  return Array.from({ length: daysInMonth }, (_, index) => `${monthShort} ${index + 1}`);
 }
 
 function downloadDateStamp(date) {
@@ -166,6 +174,19 @@ export default function DaysDownloadPage({ hostels, onHome, callMessAdmin }) {
     });
   }
 
+  function exportMessBook() {
+    if (!billReady || loading) return;
+    const timestamp = downloadDateStamp(new Date());
+    const safeHostel = fileHostelName(hostelLabel);
+    const filename = `MessBook - ${month.slice(0, 4)}_${monthTitle(month).split(' ')[0]} - ${safeHostel} - Downloaded ${timestamp}.xlsx`;
+    const headers = [...tableHeaders, '', ...messBookDayHeaders(month)];
+    const rows = sortedRows.map(student => [
+      ...exportRow(student), '',
+      ...Array.from({ length: headers.length - tableHeaders.length - 1 }, (_, index) => student.dailyStatuses?.[index] || ''),
+    ]);
+    downloadDaysExcel({ filename, headers, rows });
+  }
+
   return (
     <>
       <div className="ma-subpage-heading ma-days-back-heading">
@@ -189,6 +210,7 @@ export default function DaysDownloadPage({ hostels, onHome, callMessAdmin }) {
         <span className="ma-days-actions-spacer" />
         <button type="button" className="ma-days-export is-excel" disabled={!billReady || loading} onClick={() => exportFile('excel')}><span>▦</span>Download Excel</button>
         <button type="button" className="ma-days-export is-pdf" disabled={!billReady || loading} onClick={() => exportFile('pdf')}><span>▤</span>Download PDF</button>
+        <button type="button" className="ma-days-export is-messbook" disabled={!billReady || loading} onClick={exportMessBook}><span>▦</span>Download MessBook</button>
       </div>
 
       <section className="ma-days-controls" aria-label="Student list controls">
@@ -213,11 +235,11 @@ export default function DaysDownloadPage({ hostels, onHome, callMessAdmin }) {
 
       <section className="ma-days-list-card" aria-label="Days download students">
         <div className="ma-days-list-heading"><div><span className="ma-eyebrow">STUDENT LIST</span><h2>{hostelLabel} · {monthTitle(month)}</h2></div><span>{sortedRows.length} of {sourceRows.length} students</span></div>
-        <div className="ma-days-ledger-note"><i>i</i><span>Fined days and extras are shown as <b>NA</b> because those ledgers are not set up yet. Their NA filters are available now.</span></div>
+        <div className="ma-days-ledger-note"><i>i</i><span>Fined days, fine amounts, and extras totals are loaded from each student’s monthly profile charges.</span></div>
         <div className="ma-days-table-wrap">
           <table className="ma-days-table"><thead><tr>{tableHeaders.map(header => <th key={header}>{header}</th>)}</tr></thead>
             <tbody>{sortedRows.map(student => <tr key={student.id}>
-              <td className="ma-mono">{student.account_number || '—'}</td><td>{student.room || '—'}</td><td className="ma-days-student-name">{student.full_name || '—'}</td><td>{student.hostels?.name || '—'}</td><td>{student.academic_year || '—'}</td><td>{student.department || '—'}</td><td><b>{student.days ?? 0}</b></td><td>{student.finedDays ?? <span className="ma-days-na">NA</span>}</td><td>{student.extrasTotal ?? <span className="ma-days-na">NA</span>}</td>
+              <td className="ma-mono">{student.account_number || '—'}</td><td>{student.room || '—'}</td><td className="ma-days-student-name">{student.full_name || '—'}</td><td>{student.hostels?.name || '—'}</td><td>{student.academic_year || '—'}</td><td>{student.department || '—'}</td><td><b>{student.days ?? 0}</b></td><td>{student.finedDays ?? 0}</td><td>{student.fineTotal ?? 0}</td><td>{student.extrasTotal ?? 0}</td>
             </tr>)}</tbody>
           </table>
           {loading && <div className="ma-empty"><span className="ma-spinner" />Loading student days for {monthTitle(month)}…</div>}

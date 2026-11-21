@@ -156,6 +156,8 @@ function countBillableDays(mealsByDate, month) {
 
 async function loadDaysDownload(scope, month) {
   const { mealStart, mealEnd } = monthRange(month);
+  const [year, monthNumber] = month.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   const students = await selectRows('students', {
     select: 'id,account_number,room,full_name,hostel_id,academic_year,department,hostels(name)',
     hostel_id: inFilter(scope.hostelIds), order: 'account_number.asc',
@@ -175,6 +177,11 @@ async function loadDaysDownload(scope, month) {
     students: students.map(student => ({
       ...student,
       days: countBillableDays(mealsByStudent.get(student.id) || new Map(), month),
+      dailyStatuses: Array.from({ length: daysInMonth }, (_, index) => {
+        const date = `${month}-${String(index + 1).padStart(2, '0')}`;
+        const mealCode = mealsByStudent.get(student.id)?.get(date);
+        return mealCode == null ? '' : mealCode === '----' ? 'X' : '·';
+      }),
       finedDays: null,
       extrasTotal: null,
     })),

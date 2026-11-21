@@ -4,7 +4,7 @@ import './SuperAdminPage.css';
 
 const paths = {
   overview: '/super-admin', students: '/super-admin/students', history: '/super-admin/history',
-  attendance: '/super-admin/attendance', controls: '/super-admin/controls',
+  attendance: '/super-admin/attendance', controls: '/super-admin/controls', bills: '/super-admin/bills',
 };
 const pages = {
   overview: ['Overview', 'A clear view of today’s mess operations.'],
@@ -12,6 +12,7 @@ const pages = {
   history: ['Activity history', 'Review and search every administrative change.'],
   attendance: ['Day status', 'Set a student as present or cut on any date.'],
   controls: ['Admin controls', 'Manage lock time, mess closure, notifications, and data.'],
+  bills: ['Bill Management', 'Prepare and publish monthly hostel bills.'],
 };
 const yearOptions = ['1st Year', '2nd Year', '3rd Year', '4th Year', 'MTech 1st Year', 'MTech 2nd Year', 'Guest Lecturer', 'Other'];
 const departmentOptions = ['Mech', 'Civil', 'EEE', 'ECE', 'ICE', 'CSE', 'Other'];
@@ -19,13 +20,31 @@ const bloodGroupOptions = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 const foodOptions = ['Chicken', 'Fish', 'Egg', 'Beef', 'Veg only'];
 const historyActivityOptions = [
   ['all', 'All activities'], ['student_management', 'Student management'], ['day_status', 'Day status'],
-  ['admin_controls', 'Admin controls'], ['notifications', 'Notifications'], ['student_updates', 'Student updates'], ['login', 'Login'],
+  ['admin_controls', 'Admin controls'], ['notifications', 'Notifications'], ['student_updates', 'Student updates'], ['bill_management', 'Bill management'], ['login', 'Login'],
 ];
 const monthDates = month => {
   const [year, monthNumber] = month.split('-').map(Number);
   const count = new Date(year, monthNumber, 0).getDate();
   return Array.from({ length: count }, (_, index) => new Date(year, monthNumber - 1, index + 1));
 };
+const monthKeyInIndia = () => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit',
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}`;
+};
+const shiftBillMonth = (month, amount) => {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const date = new Date(year, monthNumber - 1 + amount, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+const billMonthLabel = month => {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, monthNumber - 1, 1)));
+};
+const billFixedTotal = items => (items || []).reduce((sum, item) => sum + Number(item.amount || 0), 0);
+const money = amount => `₹${Number(amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const accountNumbersFromInput = value => [...new Set(String(value || '').split(/[\s,;]+/)
   .map(account => account.trim().toUpperCase()).filter(account => /^[A-Z0-9._-]{1,40}$/.test(account)))].slice(0, 100);
 const iconPaths = {
@@ -43,6 +62,8 @@ const iconPaths = {
   bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
   close: <><path d="m18 6-12 12M6 6l12 12"/></>,
   more: <><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></>,
+  receipt: <><path d="M5 3 7 4.5 9 3l3 1.5L15 3l2 1.5L19 3v18l-2-1.5-2 1.5-3-1.5L9 21l-2-1.5L5 21V3Z"/><path d="M9 9h6m-6 4h6m-6 4h4"/></>,
+  eye: <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></>,
   edit: <><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></>,
   trash: <><path d="M3 6h18m-2 0-.9 14H5.9L5 6m4 0V4h6v2m-5 4v6m4-6v6"/></>,
   lock: <><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></>,
@@ -75,7 +96,20 @@ function dateLabel(date) {
 }
 
 function dateTimeLabel(value) {
+  if (!value) return '—';
   return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' }).format(new Date(value));
+}
+
+function readableError(value) {
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return value.message;
+  if (value && typeof value === 'object') {
+    const detail = value;
+    const parts = [detail.message, detail.details, detail.hint, detail.code]
+      .filter(part => typeof part === 'string' && part.trim());
+    return parts.join(' · ') || JSON.stringify(value);
+  }
+  return String(value || 'Unable to complete the request.');
 }
 
 function dateKey(date) {
@@ -103,6 +137,10 @@ function actionLabel(action) {
     'day.opened': 'Day opened', 'month.deleted': 'Month data deleted',
     'notification.sent': 'Notification sent', 'meal.created': 'Meal entry added',
     'meal.updated': 'Meal selection updated', 'meal.range_updated': 'Multiple days updated', 'student.food_preference_updated': 'Food preference updated',
+    'student.password_changed': 'Student password changed',
+    'student.bill_charges_updated': 'Monthly student charges updated',
+    'bill.created': 'Bill created', 'bill.updated': 'Bill updated', 'bill.published': 'Bill published',
+    'bill.unpublished': 'Bill unpublished', 'bill.deleted': 'Bill deleted',
   };
   return labels[action] || action?.replaceAll('.', ' ') || 'Activity';
 }
@@ -286,6 +324,7 @@ export default function SuperAdminPage() {
   const [studentsDepartment, setStudentsDepartment] = useState('all');
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [studentDialog, setStudentDialog] = useState(null);
+  const [studentChargesDialog, setStudentChargesDialog] = useState(null);
   const [bulkDialog, setBulkDialog] = useState(false);
   const [bulkResult, setBulkResult] = useState(null);
   const [bulkRows, setBulkRows] = useState([]);
@@ -330,12 +369,24 @@ export default function SuperAdminPage() {
   const [closedDaysDialog, setClosedDaysDialog] = useState(false);
   const [closedDaysList, setClosedDaysList] = useState([]);
   const [closedDaysListBusy, setClosedDaysListBusy] = useState(false);
-  const [monthToDelete, setMonthToDelete] = useState('');
+  const [cleanupDateFrom, setCleanupDateFrom] = useState('');
+  const [cleanupDateTo, setCleanupDateTo] = useState('');
+  const [cleanupExportBusy, setCleanupExportBusy] = useState(false);
+  const [cleanupHistoryBusy, setCleanupHistoryBusy] = useState(false);
   const [notificationTitle, setNotificationTitle] = useState('');
   const [notificationMessage, setNotificationMessage] = useState('');
   const [notificationHostel, setNotificationHostel] = useState('all');
   const [notificationYear, setNotificationYear] = useState('all');
   const [notificationBusy, setNotificationBusy] = useState(false);
+  const [billMonth, setBillMonth] = useState(() => shiftBillMonth(monthKeyInIndia(), -1));
+  const [billMonths, setBillMonths] = useState([]);
+  const [billRows, setBillRows] = useState([]);
+  const [billMonthMenu, setBillMonthMenu] = useState(false);
+  const [billRefreshKey, setBillRefreshKey] = useState(0);
+  const [billsLoading, setBillsLoading] = useState(false);
+  const [billModal, setBillModal] = useState(null);
+  const [billCreateHostel, setBillCreateHostel] = useState('');
+  const [billBusy, setBillBusy] = useState(false);
 
   const callAdmin = useCallback(async (action, payload = {}) => {
     if (!supabase) throw new Error('Supabase is not configured. Add the public API URL and anon key to client/.env.local.');
@@ -344,11 +395,11 @@ export default function SuperAdminPage() {
       let message = error.message || 'Unable to complete the request.';
       try {
         const detail = await error.context?.json();
-        if (detail?.error) message = detail.error;
+        if (detail?.error) message = readableError(detail.error);
       } catch { /* keep the client error */ }
-      throw new Error(message);
+      throw new Error(readableError(message));
     }
-    if (result?.error) throw new Error(result.error);
+    if (result?.error) throw new Error(readableError(result.error));
     return result;
   }, []);
 
@@ -364,7 +415,6 @@ export default function SuperAdminPage() {
       setLockDays(result.settings?.lock_days_before ?? 1);
       setDayDate(current => current || result.today);
       setCalendarDate(current => current || result.today);
-      setMonthToDelete(current => current || result.today.slice(0, 7));
     } catch (error) {
       if (error.message.includes('super-admin access')) {
         setAuthError(error.message);
@@ -478,12 +528,152 @@ export default function SuperAdminPage() {
     return () => { active = false; };
   }, [callAdmin, calendarDate, page, session, tenantId]);
 
+  useEffect(() => {
+    if (!session || !tenantId || page !== 'bills') return;
+    let active = true;
+    setBillRows([]);
+    setBillMonths([]);
+    setBillsLoading(true);
+    Promise.all([
+      callAdmin('bill-months', { tenantId }),
+      callAdmin('bills-list', { tenantId, month: billMonth }),
+    ]).then(([monthResult, billResult]) => {
+      if (!active) return;
+      setBillMonths(monthResult.months || []);
+      setBillRows([...(billResult.bills || [])].sort((first, second) => (first.hostels?.name || '').localeCompare(second.hostels?.name || '')));
+    }).catch(error => {
+      if (active) flash('error', error.message);
+    }).finally(() => {
+      if (active) setBillsLoading(false);
+    });
+    return () => { active = false; };
+  }, [billMonth, billRefreshKey, callAdmin, page, session, tenantId]);
+
+  useEffect(() => {
+    if (!studentChargesDialog || !tenantId) return;
+    let active = true;
+    const { student, month } = studentChargesDialog;
+    setStudentChargesDialog(current => current ? { ...current, loading: true } : current);
+    callAdmin('student-charges-get', { tenantId, studentId: student.id, month }).then(result => {
+      if (!active) return;
+      const charges = result.charges || {};
+      setStudentChargesDialog(current => current?.student.id === student.id && current.month === month ? {
+        ...current, extrasTotal: String(charges.extras_total ?? 0), fineDays: String(charges.fine_days ?? 0),
+        fineTotal: String(charges.fine_total ?? 0), loading: false,
+      } : current);
+    }).catch(error => {
+      if (active) {
+        flash('error', error.message);
+        setStudentChargesDialog(current => current?.student.id === student.id && current.month === month ? { ...current, loading: false } : current);
+      }
+    });
+    return () => { active = false; };
+  }, [callAdmin, studentChargesDialog?.student?.id, studentChargesDialog?.month, tenantId]);
+
   function navigate(nextPage) {
     const nextPath = paths[nextPage] || paths.overview;
     if (window.location.pathname !== nextPath) window.history.pushState({}, '', nextPath);
     setPage(nextPage);
     setMobileNav(false);
     setNotice(null);
+  }
+
+  function openBillEditor(bill, mode = 'edit') {
+    const draft = {
+      fixedItems: (bill.fixed_items || []).map((item, index) => ({
+        key: item.key || `item-${index + 1}`, label: item.label || '', amount: Number(item.amount || 0),
+      })),
+      dailyRate: Number(bill.daily_rate || 0),
+    };
+    const savedDraft = { fixedItems: draft.fixedItems.map(item => ({ ...item })), dailyRate: draft.dailyRate };
+    setBillModal({ kind: 'editor', mode, bill, draft, savedDraft });
+  }
+
+  function openCreateBill() {
+    setBillCreateHostel(hostelsWithoutBill[0]?.id || '');
+    setBillModal({ kind: 'create' });
+  }
+
+  async function createBill() {
+    if (!billCreateHostel) return;
+    setBillBusy(true);
+    try {
+      const result = await callAdmin('bill-create', { tenantId, hostelId: billCreateHostel, month: billMonth });
+      flash('success', `Bill created for ${result.bill.hostels?.name || 'the selected hostel'}.`);
+      openBillEditor(result.bill, 'edit');
+      setBillRefreshKey(value => value + 1);
+    } catch (error) { flash('error', error.message); }
+    finally { setBillBusy(false); }
+  }
+
+  function updateBillDraft(update) {
+    setBillModal(current => current?.kind === 'editor'
+      ? { ...current, draft: { ...current.draft, ...update } }
+      : current);
+  }
+
+  function applySavedBill(bill) {
+    const draft = {
+      fixedItems: (bill.fixed_items || []).map((item, index) => ({
+        key: item.key || `item-${index + 1}`, label: item.label || '', amount: Number(item.amount || 0),
+      })),
+      dailyRate: Number(bill.daily_rate || 0),
+    };
+    setBillModal({ kind: 'editor', mode: 'edit', bill, draft, savedDraft: { fixedItems: draft.fixedItems.map(item => ({ ...item })), dailyRate: draft.dailyRate } });
+    setBillRefreshKey(value => value + 1);
+  }
+
+  async function saveBill() {
+    if (billModal?.kind !== 'editor') return;
+    setBillBusy(true);
+    try {
+      const result = await callAdmin('bill-save', {
+        tenantId, billId: billModal.bill.id,
+        fixedItems: billModal.draft.fixedItems, dailyRate: billModal.draft.dailyRate,
+      });
+      applySavedBill(result.bill);
+      flash('success', 'Bill changes saved. Students will see them after publishing.');
+    } catch (error) { flash('error', error.message); }
+    finally { setBillBusy(false); }
+  }
+
+  async function publishBill() {
+    if (billModal?.kind !== 'editor') return;
+    setBillBusy(true);
+    try {
+      const result = await callAdmin('bill-publish', {
+        tenantId, billId: billModal.bill.id,
+        fixedItems: billModal.draft.fixedItems, dailyRate: billModal.draft.dailyRate,
+      });
+      applySavedBill(result.bill);
+      flash('success', `${billMonthLabel(String(result.bill.bill_month).slice(0, 7))} bill published to students.`);
+    } catch (error) { flash('error', error.message); }
+    finally { setBillBusy(false); setConfirm(null); }
+  }
+
+  async function unpublishBill() {
+    if (billModal?.kind !== 'editor') return;
+    setBillBusy(true);
+    try {
+      await callAdmin('bill-unpublish', { tenantId, billId: billModal.bill.id });
+      const bill = { ...billModal.bill, status: 'unpublished' };
+      setBillModal(current => current?.kind === 'editor' ? { ...current, bill } : current);
+      setBillRefreshKey(value => value + 1);
+      flash('success', 'Bill unpublished from student dashboards.');
+    } catch (error) { flash('error', error.message); }
+    finally { setBillBusy(false); setConfirm(null); }
+  }
+
+  async function deleteBill() {
+    if (billModal?.kind !== 'editor') return;
+    setBillBusy(true);
+    try {
+      await callAdmin('bill-delete', { tenantId, billId: billModal.bill.id });
+      setBillModal(null);
+      setBillRefreshKey(value => value + 1);
+      flash('success', 'Bill deleted.');
+    } catch (error) { flash('error', error.message); }
+    finally { setBillBusy(false); setConfirm(null); }
   }
 
   async function signIn(event) {
@@ -622,6 +812,14 @@ export default function SuperAdminPage() {
   const historyFirstRow = historyTotal ? (historyPage - 1) * 100 + 1 : 0;
   const historyLastRow = Math.min(historyPage * 100, historyTotal);
   const selectedTenant = tenants.find(item => item.id === tenantId);
+  const availableBillMonths = [...new Set([billMonth, ...billMonths])].sort((first, second) => second.localeCompare(first));
+  const hostelsWithoutBill = hostels.filter(hostel => !billRows.some(bill => bill.hostel_id === hostel.id));
+  const billModalDirty = billModal?.kind === 'editor'
+    && JSON.stringify(billModal.draft) !== JSON.stringify(billModal.savedDraft);
+  const billPendingPublication = billModal?.kind === 'editor' && billModal.bill.status === 'published'
+    && (JSON.stringify(billModal.draft.fixedItems.map(item => ({ ...item, amount: Number(item.amount || 0) })))
+      !== JSON.stringify(billModal.bill.published_fixed_items || [])
+      || Number(billModal.draft.dailyRate || 0) !== Number(billModal.bill.published_daily_rate || 0));
   const adminName = session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || 'Super admin';
 
   function openNewStudent(student = null) {
@@ -654,6 +852,38 @@ export default function SuperAdminPage() {
     setStudentCalendarSelected(null);
     setStudentCalendarNotice('');
     setStudentCalendarError('');
+  }
+
+  function openStudentCharges(student) {
+    setStudentChargesDialog({
+      student, month: billMonth || shiftBillMonth(monthKeyInIndia(), -1),
+      extrasTotal: '0', fineDays: '0', fineTotal: '0', loading: true, saving: false,
+    });
+  }
+
+  async function saveStudentCharges(event) {
+    event.preventDefault();
+    if (!studentChargesDialog) return;
+    setStudentChargesDialog(current => current ? { ...current, saving: true } : current);
+    try {
+      const result = await callAdmin('student-charges-save', {
+        tenantId,
+        studentId: studentChargesDialog.student.id,
+        month: studentChargesDialog.month,
+        extrasTotal: studentChargesDialog.extrasTotal,
+        fineDays: studentChargesDialog.fineDays,
+        fineTotal: studentChargesDialog.fineTotal,
+      });
+      const charges = result.charges || {};
+      setStudentChargesDialog(current => current ? {
+        ...current, extrasTotal: String(charges.extras_total ?? 0), fineDays: String(charges.fine_days ?? 0),
+        fineTotal: String(charges.fine_total ?? 0), saving: false,
+      } : current);
+      flash('success', `Monthly charges updated for ${studentChargesDialog.student.full_name}.`);
+    } catch (error) {
+      flash('error', error.message);
+      setStudentChargesDialog(current => current ? { ...current, saving: false } : current);
+    }
   }
 
   function moveStudentCalendarMonth(offset) {
@@ -893,14 +1123,37 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function deleteSelectedMonth() {
+  async function downloadCleanupHistory() {
+    if (!cleanupDateFrom || !cleanupDateTo) return;
+    setCleanupExportBusy(true);
+    try {
+      const result = await callAdmin('history-export', { tenantId, dateFrom: cleanupDateFrom, dateTo: cleanupDateTo });
+      const blob = makeXlsxBlob(result.activities || []);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeTenant = (selectedTenant?.name || 'mess').replace(/[^a-zA-Z0-9-]+/g, '-').replace(/^-|-$/g, '').toLowerCase();
+      link.href = downloadUrl;
+      link.download = `digimessbook-${safeTenant || 'mess'}-activity-history-${cleanupDateFrom}-to-${cleanupDateTo}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      flash('success', `Downloaded ${result.activities?.length || 0} activity records for ${cleanupDateFrom} to ${cleanupDateTo}.`);
+    } catch (error) { flash('error', error.message); }
+    finally { setCleanupExportBusy(false); }
+  }
+
+  async function deleteActivityHistory() {
+    setCleanupHistoryBusy(true);
     setSettingsBusy(true);
     try {
-      await callAdmin('delete-month', { tenantId, month: monthToDelete });
+      const result = await callAdmin('delete-activity-history', { tenantId, dateFrom: cleanupDateFrom, dateTo: cleanupDateTo });
       await refreshDashboard(tenantId);
-      flash('success', `Meal entries for ${monthToDelete} were deleted.`);
+      setHistoryPage(1);
+      setHistoryRefreshKey(value => value + 1);
+      flash('success', `Deleted ${result.deleted} activity record${result.deleted === 1 ? '' : 's'} from ${cleanupDateFrom} to ${cleanupDateTo}.`);
     } catch (error) { flash('error', error.message); }
-    finally { setSettingsBusy(false); setConfirm(null); }
+    finally { setCleanupHistoryBusy(false); setSettingsBusy(false); setConfirm(null); }
   }
 
   async function sendNotification(event) {
@@ -954,7 +1207,7 @@ export default function SuperAdminPage() {
         <div className="sa-tenant-select"><span className="sa-tenant-dot" /><select value={tenantId} onChange={event => setTenantId(event.target.value)} aria-label="Select mess group">{tenants.map(tenant => <option value={tenant.id} key={tenant.id}>{tenant.name}</option>)}</select><span>⌄</span></div>
         <nav className="sa-nav" aria-label="Admin sections">
           <span className="sa-nav-label">OVERVIEW</span>
-          {Object.entries(pages).map(([key, [label]]) => <a key={key} href={paths[key]} className={`sa-nav-link ${page === key ? 'is-active' : ''}`} onClick={event => { event.preventDefault(); navigate(key); }}><Icon name={{ overview: 'grid', students: 'users', history: 'history', attendance: 'calendar', controls: 'settings' }[key]} /><span>{label}</span>{key === 'history' && <i className="sa-nav-count">{data.stats?.changesToday || 0}</i>}</a>)}
+          {Object.entries(pages).map(([key, [label]]) => <a key={key} href={paths[key]} className={`sa-nav-link ${page === key ? 'is-active' : ''}`} onClick={event => { event.preventDefault(); navigate(key); }}><Icon name={{ overview: 'grid', students: 'users', history: 'history', attendance: 'calendar', controls: 'settings', bills: 'receipt' }[key]} /><span>{label}</span>{key === 'history' && <i className="sa-nav-count">{data.stats?.changesToday || 0}</i>}</a>)}
         </nav>
         <div className="sa-sidebar-bottom">
           <div className="sa-sidebar-health"><span className="sa-health-indicator"/><span><b>System operational</b><small>Supabase connected</small></span></div>
@@ -1030,6 +1283,24 @@ export default function SuperAdminPage() {
             <div className="sa-footer-note"><span className="sa-health-indicator"/> Admin actions are protected and recorded in the audit history.</div>
           </>}
 
+          {page === 'bills' && <>
+            <div className="sa-page-heading">
+              <div><span className="sa-eyebrow">MONTHLY BILLING</span><h1>Bill Management</h1><p>Manage fixed charges and daily mess rates for each hostel.</p></div>
+              <div className="sa-heading-actions">
+                <div className="sa-bill-month-picker">
+                  <button type="button" className="sa-button sa-button-secondary" aria-expanded={billMonthMenu} onClick={() => setBillMonthMenu(value => !value)}><Icon name="calendar" size={16}/>{billMonthLabel(billMonth)}<span className="sa-month-caret">⌄</span></button>
+                  {billMonthMenu && <div className="sa-bill-month-menu" aria-label="Available bill months">{availableBillMonths.map(month => <button type="button" role="option" aria-selected={month === billMonth} key={month} className={month === billMonth ? 'is-selected' : ''} onClick={() => { setBillRows([]); setBillMonth(month); setBillMonthMenu(false); }}>{billMonthLabel(month)}{month === shiftBillMonth(monthKeyInIndia(), -1) && <small>Previous month</small>}</button>)}<label className="sa-bill-month-custom">Choose another month<input type="month" value={billMonth} onChange={event => { if (event.target.value) { setBillRows([]); setBillMonth(event.target.value); } setBillMonthMenu(false); }}/></label></div>}
+                </div>
+                <button type="button" className="sa-button sa-button-primary" onClick={openCreateBill} disabled={billsLoading || !hostelsWithoutBill.length}><Icon name="plus" size={17}/>Add Bill</button>
+              </div>
+            </div>
+            <section className="sa-card sa-bills-card">
+              <div className="sa-bills-card-heading"><div><b>{billMonthLabel(billMonth)}</b><span>Bills for each hostel in {selectedTenant?.name || 'this group'}</span></div><StatusPill tone="neutral">{billRows.length} bill{billRows.length === 1 ? '' : 's'}</StatusPill></div>
+              {billsLoading ? <div className="sa-loading-row"><span className="sa-loader"/>Loading bills…</div> : billRows.length ? <div className="sa-table-wrap"><table className="sa-table sa-bill-table"><thead><tr><th>Hostel</th><th>Bill month & year</th><th>Status</th><th>Fixed amounts total</th><th>Daily rate</th><th>Options</th></tr></thead><tbody>{billRows.map(bill => <tr key={bill.id}><td><b>{bill.hostels?.name || '—'}</b></td><td>{billMonthLabel(String(bill.bill_month).slice(0, 7))}</td><td><StatusPill tone={bill.status === 'published' ? 'green' : 'amber'}>{bill.status === 'published' ? 'Published' : 'Unpublished'}</StatusPill></td><td><b>{money(billFixedTotal(bill.fixed_items))}</b></td><td>{money(bill.daily_rate)}</td><td><div className="sa-row-actions sa-bill-actions"><button type="button" title="View bill" aria-label={`View ${bill.hostels?.name || 'hostel'} bill`} onClick={() => openBillEditor(bill, 'view')}><Icon name="eye" size={17}/></button><button type="button" title="Edit bill" aria-label={`Edit ${bill.hostels?.name || 'hostel'} bill`} onClick={() => openBillEditor(bill, 'edit')}><Icon name="edit" size={17}/></button></div></td></tr>)}</tbody></table></div> : <EmptyState title="No bills for this month" body="Add a bill for a hostel to set its fixed charges and daily rate."/>}
+              <div className="sa-bills-footnote"><Icon name="info" size={15}/>Saved changes appear in student dashboards only after you publish the bill.</div>
+            </section>
+          </>}
+
           {page === 'students' && <>
             <div className="sa-page-heading"><div><span className="sa-eyebrow">DIRECTORY</span><h1>Student management</h1><p>Search, filter, and manage student access in one place.</p></div><div className="sa-heading-actions"><button className="sa-button sa-button-secondary" onClick={downloadStudentTemplate}><Icon name="download" size={17} /> Download template</button><button className="sa-button sa-button-secondary" onClick={() => { setBulkResult(null); setBulkRows([]); setBulkProgress(0); setBulkError(''); setBulkAwaitConfirm(false); setBulkDialog(true); }}><Icon name="upload" size={17} /> Bulk import</button><button className="sa-button sa-button-primary" onClick={() => openNewStudent()}><Icon name="plus" size={18} /> Add student</button></div></div>
             <section className="sa-card sa-students-card">
@@ -1041,7 +1312,7 @@ export default function SuperAdminPage() {
               </div>
               {selectedStudents.length > 0 && <div className="sa-bulk-toolbar"><span><b>{selectedStudents.length}</b> selected</span><button className="sa-button sa-button-soft" onClick={() => setConfirm({ title: 'Reset student passwords?', message: `Set each selected student's password to their admission number. Students without an admission number will use the fallback password Mess@2026!. No email will be sent.`, confirmText: 'Reset passwords', run: () => doReset(selectedStudents) })}><Icon name="lock" size={16}/> Reset passwords</button><button className="sa-text-button" onClick={() => setSelectedStudents([])}>Clear selection</button></div>}
               <div className="sa-table-wrap"><table className="sa-table"><thead><tr><th><input type="checkbox" aria-label="Select all visible students" checked={filteredStudents.length > 0 && filteredStudents.every(student => selectedStudents.includes(student.id))} onChange={toggleVisibleStudents}/></th><th>Student</th><th>Account no.</th><th>Hostel / room</th><th>Year</th><th>Department</th><th>Actions</th></tr></thead><tbody>
-                {filteredStudents.map(student => <tr key={student.id}><td><input type="checkbox" aria-label={`Select ${student.full_name}`} checked={selectedStudents.includes(student.id)} onChange={() => toggleStudent(student.id)}/></td><td><div className="sa-student-cell"><span className="sa-student-avatar">{student.full_name?.slice(0, 1).toUpperCase()}</span><span><b>{student.full_name}</b><small>{student.food_preference || 'No food preference'}</small></span></div></td><td><span className="sa-mono">{student.account_number}</span></td><td><b>{student.hostels?.name || '—'}</b><small className="sa-secondary-line">Room {student.room || '—'}</small></td><td>{student.academic_year || '—'}</td><td>{student.department || '—'}</td><td><div className="sa-row-actions"><button title="Edit student" aria-label={`Edit ${student.full_name}`} onClick={() => openNewStudent(student)}><Icon name="edit" size={17}/></button><button title="Open student calendar" aria-label={`Open ${student.full_name}'s meal calendar`} onClick={() => openStudentCalendar(student)}><Icon name="calendar" size={16}/></button><button title="Reset password" aria-label={`Reset ${student.full_name}'s password`} onClick={() => setConfirm({ title: 'Reset this password?', message: `Set ${student.full_name} (${student.account_number})'s password to their admission number${String(student.admission_number || '').trim() ? '' : ', or to the fallback password Mess@2026! because no admission number is on file'}. No email will be sent.`, confirmText: 'Reset password', run: () => doReset([student.id]) })}><Icon name="lock" size={16}/></button><button title="Delete student" aria-label={`Delete ${student.full_name}`} className="is-danger" onClick={() => setConfirm({ title: 'Delete this student?', message: `This removes ${student.full_name} and their login, meal entries, and notifications. The admin audit history is retained.`, confirmText: 'Delete student', danger: true, run: () => doDeleteStudent(student) })}><Icon name="trash" size={16}/></button></div></td></tr>)}
+                {filteredStudents.map(student => <tr key={student.id}><td><input type="checkbox" aria-label={`Select ${student.full_name}`} checked={selectedStudents.includes(student.id)} onChange={() => toggleStudent(student.id)}/></td><td><div className="sa-student-cell"><span className="sa-student-avatar">{student.full_name?.slice(0, 1).toUpperCase()}</span><span><b>{student.full_name}</b><small>{student.food_preference || 'No food preference'}</small></span></div></td><td><span className="sa-mono">{student.account_number}</span></td><td><b>{student.hostels?.name || '—'}</b><small className="sa-secondary-line">Room {student.room || '—'}</small></td><td>{student.academic_year || '—'}</td><td>{student.department || '—'}</td><td><div className="sa-row-actions"><button title="Edit student" aria-label={`Edit ${student.full_name}`} onClick={() => openNewStudent(student)}><Icon name="edit" size={17}/></button><button title="Manage monthly extras and fines" aria-label={`Manage monthly extras and fines for ${student.full_name}`} onClick={() => openStudentCharges(student)}><Icon name="receipt" size={16}/></button><button title="Open student calendar" aria-label={`Open ${student.full_name}'s meal calendar`} onClick={() => openStudentCalendar(student)}><Icon name="calendar" size={16}/></button><button title="Reset password" aria-label={`Reset ${student.full_name}'s password`} onClick={() => setConfirm({ title: 'Reset this password?', message: `Set ${student.full_name} (${student.account_number})'s password to their admission number${String(student.admission_number || '').trim() ? '' : ', or to the fallback password Mess@2026! because no admission number is on file'}. No email will be sent.`, confirmText: 'Reset password', run: () => doReset([student.id]) })}><Icon name="lock" size={16}/></button><button title="Delete student" aria-label={`Delete ${student.full_name}`} className="is-danger" onClick={() => setConfirm({ title: 'Delete this student?', message: `This removes ${student.full_name} and their login, meal entries, and notifications. The admin audit history is retained.`, confirmText: 'Delete student', danger: true, run: () => doDeleteStudent(student) })}><Icon name="trash" size={16}/></button></div></td></tr>)}
               </tbody></table>{filteredStudents.length === 0 && <EmptyState title="No students found" body="Try a different search term or filter."/>}</div>
               <div className="sa-table-footer"><span>Showing <b>{filteredStudents.length}</b> of {students.length} students</span><button className="sa-link-button" onClick={() => navigate('history')}>View student history <Icon name="arrow" size={15}/></button></div>
             </section>
@@ -1088,12 +1359,27 @@ export default function SuperAdminPage() {
 
               <section className="sa-card sa-control-card sa-notification-card"><div className="sa-control-title"><span className="sa-control-icon is-violet"><Icon name="bell"/></span><div><h2>Send a notification</h2><p>Deliver a message to students in the selected group.</p></div></div><form className="sa-settings-form" onSubmit={sendNotification}><label className="sa-field"><span>Audience</span><div className="sa-audience-fields"><select aria-label="Notification hostel" value={notificationHostel} onChange={event => setNotificationHostel(event.target.value)}><option value="all">All hostels</option>{hostels.map(hostel => <option value={hostel.id} key={hostel.id}>{hostel.name}</option>)}</select><select aria-label="Notification year" value={notificationYear} onChange={event => setNotificationYear(event.target.value)}><option value="all">All years</option>{years.map(year => <option key={year}>{year}</option>)}</select></div></label><label className="sa-field"><span>Title</span><input value={notificationTitle} onChange={event => setNotificationTitle(event.target.value)} maxLength={120} placeholder="Important mess update" required/></label><label className="sa-field"><span>Message</span><textarea value={notificationMessage} onChange={event => setNotificationMessage(event.target.value)} maxLength={2000} rows={4} placeholder="Write your message to students…" required/></label><div className="sa-notice-preview">This message will reach approximately <b>{students.filter(student => (notificationHostel === 'all' || student.hostel_id === notificationHostel) && (notificationYear === 'all' || student.academic_year === notificationYear)).length}</b> student{students.length === 1 ? '' : 's'}.</div><button className="sa-button sa-button-primary" disabled={notificationBusy}><Icon name="arrow" size={16}/>{notificationBusy ? 'Sending…' : 'Send notification'}</button></form></section>
 
-              <section className="sa-card sa-control-card sa-danger-card"><div className="sa-control-title"><span className="sa-control-icon is-red"><Icon name="trash"/></span><div><h2>Clean up meal data</h2><p>Permanently remove meal entries for one month.</p></div></div><div className="sa-settings-form"><label className="sa-field"><span>Month to delete</span><input type="month" value={monthToDelete} onChange={event => setMonthToDelete(event.target.value)} required/></label><div className="sa-danger-warning"><Icon name="alert" size={17}/><span>This deletes meal-day entries for <b>all students</b> in this month. Student accounts and activity history stay intact.</span></div><button className="sa-button sa-button-danger" disabled={settingsBusy || !monthToDelete} onClick={() => setConfirm({ title: `Delete ${monthToDelete} meal data?`, message: 'Meal entries for every student in this month will be permanently removed. This action cannot be undone.', confirmText: 'Delete month data', danger: true, run: deleteSelectedMonth })}><Icon name="trash" size={16}/> Delete month</button></div></section>
+              <section className="sa-card sa-control-card sa-danger-card"><div className="sa-control-title"><span className="sa-control-icon is-red"><Icon name="trash"/></span><div><h2>Clean up Activity History</h2><p>Download or permanently delete activity records for a date range.</p></div></div><div className="sa-settings-form"><div className="sa-form-two"><label className="sa-field"><span>From date</span><input type="date" value={cleanupDateFrom} max={cleanupDateTo || undefined} onChange={event => setCleanupDateFrom(event.target.value)} required/></label><label className="sa-field"><span>To date</span><input type="date" value={cleanupDateTo} min={cleanupDateFrom || undefined} onChange={event => setCleanupDateTo(event.target.value)} required/></label></div><div className="sa-danger-warning"><Icon name="alert" size={17}/><span>Deleting removes <b>all admin and student activity logs</b> recorded within the selected dates. This cannot be undone.</span></div><div className="sa-inline-actions"><button type="button" className="sa-button sa-button-secondary" disabled={cleanupExportBusy || settingsBusy || !cleanupDateFrom || !cleanupDateTo} onClick={downloadCleanupHistory}><Icon name="download" size={16}/>{cleanupExportBusy ? 'Preparing Excel…' : 'Download Log (Excel)'}</button><button type="button" className="sa-button sa-button-danger" disabled={cleanupHistoryBusy || cleanupExportBusy || !cleanupDateFrom || !cleanupDateTo || settingsBusy} onClick={() => setConfirm({ title: 'Delete activity history for this period?', message: `Permanently delete all admin and student activity logs from ${cleanupDateFrom} through ${cleanupDateTo}. This cannot be undone.`, confirmText: 'Delete Log', danger: true, run: deleteActivityHistory })}><Icon name="trash" size={16}/>{cleanupHistoryBusy ? 'Deleting…' : 'Delete Log'}</button></div></div></section>
             </div>
           </>}
           <footer className="sa-page-footer"><span>© 2026 DigiMessBook</span><span>Admin actions are protected and logged.</span></footer>
         </main>
       </div>
+
+      {studentChargesDialog && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !studentChargesDialog.saving) setStudentChargesDialog(null); }}><section className="sa-modal sa-student-charges-modal" role="dialog" aria-modal="true" aria-labelledby="student-charges-title"><div className="sa-modal-heading"><span className="sa-control-icon is-violet"><Icon name="receipt"/></span><div><h2 id="student-charges-title">Monthly student charges</h2><p>{studentChargesDialog.student.full_name} · {studentChargesDialog.student.account_number}</p></div><button type="button" className="sa-modal-close" disabled={studentChargesDialog.saving} onClick={() => setStudentChargesDialog(null)} aria-label="Close"><Icon name="close"/></button></div><form className="sa-modal-form" onSubmit={saveStudentCharges}><label className="sa-field"><span>Bill month</span><input type="month" value={studentChargesDialog.month} onChange={event => setStudentChargesDialog(current => current ? { ...current, month: event.target.value } : current)} required/></label>{studentChargesDialog.loading ? <div className="sa-loading-row"><span className="sa-loader"/>Loading profile charges…</div> : <><div className="sa-monthly-charge-note">These values are attached to this student’s monthly profile and are fetched into the published bill breakdown.</div><label className="sa-field"><span>Extras total (₹)</span><input type="number" min="0" step="0.01" value={studentChargesDialog.extrasTotal} onChange={event => setStudentChargesDialog(current => current ? { ...current, extrasTotal: event.target.value } : current)} required/></label><div className="sa-form-two"><label className="sa-field"><span>Fined days</span><input type="number" min="0" step="1" value={studentChargesDialog.fineDays} onChange={event => setStudentChargesDialog(current => current ? { ...current, fineDays: event.target.value } : current)} required/></label><label className="sa-field"><span>Fine amount (₹)</span><input type="number" min="0" step="0.01" value={studentChargesDialog.fineTotal} onChange={event => setStudentChargesDialog(current => current ? { ...current, fineTotal: event.target.value } : current)} required/></label></div></> }<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setStudentChargesDialog(null)} disabled={studentChargesDialog.saving}>Close</button><button className="sa-button sa-button-primary" disabled={studentChargesDialog.loading || studentChargesDialog.saving}>{studentChargesDialog.saving ? 'Saving…' : 'Save monthly charges'}</button></div></form></section></div>}
+
+      {billModal?.kind === 'create' && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !billBusy) setBillModal(null); }}><section className="sa-modal sa-bill-create-modal" role="dialog" aria-modal="true" aria-labelledby="bill-create-title"><div className="sa-modal-heading"><span className="sa-control-icon is-green"><Icon name="receipt"/></span><div><h2 id="bill-create-title">Create bill</h2><p>{billMonthLabel(billMonth)} · {selectedTenant?.name || 'Selected group'}</p></div><button type="button" className="sa-modal-close" disabled={billBusy} onClick={() => setBillModal(null)} aria-label="Close"><Icon name="close"/></button></div><label className="sa-field"><span>Hostel</span><select value={billCreateHostel} onChange={event => setBillCreateHostel(event.target.value)} required><option value="">Select hostel</option>{hostelsWithoutBill.map(hostel => <option key={hostel.id} value={hostel.id}>{hostel.name}</option>)}</select></label><p className="sa-bill-create-note">A new bill starts unpublished with the default fixed amount fields. You can edit it before publishing.</p><div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setBillModal(null)} disabled={billBusy}>Cancel</button><button type="button" className="sa-button sa-button-primary" onClick={createBill} disabled={billBusy || !billCreateHostel}>{billBusy ? 'Creating…' : 'Create bill'}</button></div></section></div>}
+
+      {billModal?.kind === 'editor' && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !billBusy) setBillModal(null); }}><section className="sa-modal sa-bill-editor-modal" role="dialog" aria-modal="true" aria-labelledby="bill-editor-title"><div className="sa-modal-heading"><span className="sa-control-icon is-green"><Icon name="receipt"/></span><div><div className="sa-bill-modal-eyebrow">{billModal.mode === 'view' ? 'BILL DETAILS · VIEW ONLY' : 'BILL DETAILS · EDITOR'}</div><h2 id="bill-editor-title">{billModal.bill.hostels?.name || 'Hostel'} · {billMonthLabel(String(billModal.bill.bill_month).slice(0, 7))}</h2></div><button type="button" className="sa-modal-close" disabled={billBusy} onClick={() => setBillModal(null)} aria-label="Close"><Icon name="close"/></button></div>
+        <div className="sa-bill-meta-grid"><div><span>Bill unique ID</span><b className="sa-bill-id">{billModal.bill.id}</b></div><div><span>Bill created</span><b>{dateTimeLabel(billModal.bill.created_at)}</b></div><div><span>Last edited</span><b>{dateTimeLabel(billModal.bill.last_edited_at)}</b></div><div><span>Last published</span><b>{dateTimeLabel(billModal.bill.last_published_at)}</b></div></div>
+        <div className="sa-bill-editor-status"><span>Publication status</span><StatusPill tone={billModal.bill.status === 'published' ? 'green' : 'amber'}>{billModal.bill.status === 'published' ? 'Published' : 'Unpublished'}</StatusPill></div>{billPendingPublication && <div className="sa-bill-publish-note"><Icon name="info" size={15}/>Student dashboards still show the previously published version until you publish these changes.</div>}
+        <section className="sa-bill-expense-section"><div className="sa-bill-section-heading"><div><span className="sa-eyebrow">EXPENSES</span><h3>Fixed amount items</h3></div><b>{money(billFixedTotal(billModal.draft.fixedItems))}</b></div><p className="sa-bill-section-copy">Monthly charges applied once to each student in this hostel.</p>
+          <div className="sa-bill-items">{billModal.draft.fixedItems.map((item, index) => <div className="sa-bill-item-row" key={item.key || index}><label className="sa-field"><span>{billModal.mode === 'view' ? `Item ${index + 1}` : 'Item name'}</span>{billModal.mode === 'view' ? <b className="sa-bill-read-value">{item.label}</b> : <input maxLength={80} value={item.label} onChange={event => updateBillDraft({ fixedItems: billModal.draft.fixedItems.map((row, rowIndex) => rowIndex === index ? { ...row, label: event.target.value } : row) })}/>}</label><label className="sa-field"><span>Amount (₹)</span>{billModal.mode === 'view' ? <b className="sa-bill-read-value">{money(item.amount)}</b> : <input type="number" min="0" step="0.01" value={item.amount} onChange={event => updateBillDraft({ fixedItems: billModal.draft.fixedItems.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row) })}/>}</label>{billModal.mode === 'edit' && <button type="button" className="sa-bill-remove-item" aria-label={`Delete ${item.label || 'fixed item'}`} title="Delete item" onClick={() => updateBillDraft({ fixedItems: billModal.draft.fixedItems.filter((_, rowIndex) => rowIndex !== index) })}><Icon name="trash" size={16}/></button>}</div>)}{billModal.draft.fixedItems.length === 0 && <div className="sa-bill-no-items">No fixed amount items. Add a field to include one.</div>}</div>
+          {billModal.mode === 'edit' && <button type="button" className="sa-bill-add-item" onClick={() => updateBillDraft({ fixedItems: [...billModal.draft.fixedItems, { key: `custom-${Date.now()}`, label: '', amount: 0 }] })}><Icon name="plus" size={15}/>Add fixed amount field</button>}
+        </section>
+        <section className="sa-bill-expense-section sa-bill-variable-section"><div className="sa-bill-section-heading"><div><span className="sa-eyebrow">EXPENSES</span><h3>Variable cost items</h3></div></div><div className="sa-bill-variable-row"><div><b>Daily Rate</b><small>Multiplied by this student’s billable days in {billMonthLabel(String(billModal.bill.bill_month).slice(0, 7))}.</small></div>{billModal.mode === 'view' ? <strong>{money(billModal.draft.dailyRate)} <small>/ day</small></strong> : <label className="sa-field"><span>Amount per day (₹)</span><input type="number" min="0" step="0.01" value={billModal.draft.dailyRate} onChange={event => updateBillDraft({ dailyRate: event.target.value })}/></label>}</div><div className="sa-bill-source-row"><div><b>Extras</b><small>Per-student monthly total</small></div><span>Fetched from student profile</span></div><div className="sa-bill-source-row"><div><b>Fine amount</b><small>Fined days and total amount</small></div><span>Fetched from student profile</span></div></section>
+        {billModal.mode === 'edit' ? <div className="sa-bill-modal-actions"><div className="sa-bill-danger-actions"><button type="button" className="sa-button sa-button-danger sa-button-small" onClick={() => setConfirm({ title: 'Delete this bill?', message: `Permanently delete the ${billMonthLabel(String(billModal.bill.bill_month).slice(0, 7))} bill for ${billModal.bill.hostels?.name || 'this hostel'} from admin and student dashboards. This cannot be undone.`, confirmText: 'Delete bill', danger: true, run: deleteBill })} disabled={billBusy}><Icon name="trash" size={15}/>Delete</button>{billModal.bill.status === 'published' && <button type="button" className="sa-button sa-button-secondary sa-button-small" onClick={() => setConfirm({ title: 'Unpublish this bill?', message: 'Students will no longer see this bill. It will remain available in Bill Management and can be published again.', confirmText: 'Unpublish bill', run: unpublishBill })} disabled={billBusy || billModalDirty}>Unpublish</button>}</div><div className="sa-bill-primary-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setBillModal(null)} disabled={billBusy}>Discard</button><button type="button" className="sa-button sa-button-secondary" onClick={saveBill} disabled={billBusy || !billModalDirty}>{billBusy ? 'Saving…' : 'Save'}</button><button type="button" className="sa-button sa-button-primary" onClick={() => setConfirm({ title: 'Publish this bill?', message: `Publish the ${billMonthLabel(String(billModal.bill.bill_month).slice(0, 7))} bill for ${billModal.bill.hostels?.name || 'this hostel'}? The current editor values will be saved and shown on student dashboards.`, confirmText: 'Publish bill', run: publishBill })} disabled={billBusy}>{billBusy ? 'Publishing…' : 'Publish'}</button></div></div> : <div className="sa-bill-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setBillModal(null)}>Close</button></div>}
+      </section></div>}
 
       {studentDialog && (
         <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setStudentDialog(null); }}>
@@ -1155,7 +1441,7 @@ export default function SuperAdminPage() {
 
       {passwordDialogOpen && <div className="sa-modal-overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !passwordChangeBusy) setPasswordDialogOpen(false); }}><section className="sa-modal sa-password-modal" role="dialog" aria-modal="true" aria-labelledby="admin-password-title"><div className="sa-modal-heading"><span className="sa-control-icon is-blue"><Icon name="lock"/></span><div><h2 id="admin-password-title">Change password</h2><p>Verify your email before choosing a new password.</p></div><button className="sa-modal-close" disabled={passwordChangeBusy} onClick={() => setPasswordDialogOpen(false)} aria-label="Close"><Icon name="close"/></button></div>{passwordChangeMessage === 'Your password has been changed.' ? <div className="sa-password-success"><span><Icon name="check" size={21}/></span><b>Password changed</b><p>Your super-admin password was updated successfully.</p><button className="sa-button sa-button-primary" onClick={() => setPasswordDialogOpen(false)}>Done</button></div> : <form className="sa-modal-form" onSubmit={updateAdminPassword}><div className="sa-otp-address"><Icon name="shield" size={17}/><span>Verification code will be sent to <b>{session.user.email}</b>.</span></div>{!otpSent ? <button type="button" className="sa-button sa-button-primary sa-send-otp" onClick={sendPasswordOtp} disabled={passwordChangeBusy}>{passwordChangeBusy ? 'Sending code…' : 'Send email verification code'}</button> : <><div className="sa-otp-sent" role="status">{passwordChangeMessage}</div><label className="sa-field"><span>Email verification code</span><input inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={otpCode} onChange={event => setOtpCode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="6-digit code" required/></label><label className="sa-field"><span>New password</span><input type="password" autoComplete="new-password" minLength={8} value={newAdminPassword} onChange={event => setNewAdminPassword(event.target.value)} placeholder="At least 8 characters" required/></label><label className="sa-field"><span>Confirm new password</span><input type="password" autoComplete="new-password" minLength={8} value={confirmAdminPassword} onChange={event => setConfirmAdminPassword(event.target.value)} placeholder="Re-enter new password" required/></label><div className="sa-otp-actions"><button type="button" className="sa-text-button" onClick={sendPasswordOtp} disabled={passwordChangeBusy}>Resend code</button><button className="sa-button sa-button-primary" disabled={passwordChangeBusy}>{passwordChangeBusy ? 'Verifying…' : 'Verify and change password'}</button></div></>}{passwordChangeError && <p className="sa-form-error" role="alert">{passwordChangeError}</p>}<div className="sa-modal-actions"><button type="button" className="sa-button sa-button-secondary" onClick={() => setPasswordDialogOpen(false)} disabled={passwordChangeBusy}>Cancel</button></div></form>}</section></div>}
 
-      {confirm && <div className="sa-modal-overlay" role="presentation"><section className="sa-modal sa-confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><span className={`sa-confirm-icon ${confirm.danger ? 'is-danger' : ''}`}><Icon name={confirm.danger ? 'alert' : 'lock'} size={23}/></span><h2 id="confirm-title">{confirm.title}</h2><p>{confirm.message}</p><div className="sa-modal-actions"><button className="sa-button sa-button-secondary" onClick={() => setConfirm(null)} disabled={studentBusy || settingsBusy}>Cancel</button><button className={`sa-button ${confirm.danger ? 'sa-button-danger' : 'sa-button-primary'}`} onClick={confirm.run} disabled={studentBusy || settingsBusy}>{studentBusy || settingsBusy ? 'Working…' : confirm.confirmText}</button></div></section></div>}
+      {confirm && <div className="sa-modal-overlay" role="presentation"><section className="sa-modal sa-confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><span className={`sa-confirm-icon ${confirm.danger ? 'is-danger' : ''}`}><Icon name={confirm.danger ? 'alert' : 'lock'} size={23}/></span><h2 id="confirm-title">{confirm.title}</h2><p>{confirm.message}</p><div className="sa-modal-actions"><button className="sa-button sa-button-secondary" onClick={() => setConfirm(null)} disabled={studentBusy || settingsBusy || billBusy}>Cancel</button><button className={`sa-button ${confirm.danger ? 'sa-button-danger' : 'sa-button-primary'}`} onClick={confirm.run} disabled={studentBusy || settingsBusy || billBusy}>{studentBusy || settingsBusy || billBusy ? 'Working…' : confirm.confirmText}</button></div></section></div>}
     </div>
   );
 }

@@ -209,6 +209,8 @@
 .ma-days-download-actions .ma-days-export:hover:not(:disabled) { border-color: #255d39; background: #255d39; }
 .ma-days-download-actions .ma-days-export.is-pdf { border-color: #456994; background: #456994; }
 .ma-days-download-actions .ma-days-export.is-pdf:hover:not(:disabled) { border-color: #36587f; background: #36587f; }
+.ma-days-download-actions .ma-days-export.is-messbook { border-color: #e5c248; background: #f6d95a; color: #78232b; }
+.ma-days-download-actions .ma-days-export.is-messbook:hover:not(:disabled) { border-color: #d4b230; background: #f0d04a; }
 .ma-days-controls { display: grid; grid-template-columns: minmax(0, .92fr) minmax(0, 1.55fr); align-items: stretch; gap: 12px; margin-bottom: 13px; }
 .ma-days-control-card { min-width: 0; padding: 13px 14px; border: 1px solid #e5ebe4; border-radius: 11px; background: #fff; box-shadow: 0 2px 8px #21432b06; }
 .ma-days-control-heading { display: flex; align-items: center; gap: 9px; }
@@ -265,6 +267,7 @@
   .ma-days-actions-spacer { display: none; }
   .ma-days-download-actions .ma-days-reset { flex: 1 0 100%; }
   .ma-days-download-actions .ma-days-export { flex: 1; }
+  .ma-days-download-actions .ma-days-export.is-messbook { flex: 1 0 100%; }
   .ma-days-control-card { padding: 11px; }
   .ma-days-control-heading select { width: 120px; }
   .ma-days-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -47,6 +47,14 @@ function monthLabel(monthKey) {
   return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' })
     .format(new Date(Date.UTC(year, month - 1, 1)));
 }
+function formatCurrency(amount) {
+  return `₹ ${Number(amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function isUnavailableBillingTableError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return error?.code === 'PGRST205'
+    || (message.includes('schema cache') && (message.includes('monthly_bills') || message.includes('student_monthly_charges')));
+}
 function mealCodeFor(days, date) {
   const dateKey = keyOf(date);
   if (Object.prototype.hasOwnProperty.call(days || {}, dateKey)) return String(days[dateKey] || '----').trim();
@@ -107,21 +115,29 @@ function billable(days, dates) {
   return n;
 }
 
-async function fetchStudentMonthData(studentId, tenantId, monthKey) {
+async function fetchStudentMonthData(studentId, tenantId, hostelId, monthKey) {
   const { start, end } = monthBounds(monthKey);
   const mealStart = shiftDateKey(start, -1);
   const mealEnd = shiftDateKey(end, 1);
-  const [mealResult, closedDaysResult] = await Promise.all([
+  const [mealResult, closedDaysResult, billResult, chargesResult] = await Promise.all([
     supabase.from('meal_days').select('meal_date,meal_code').eq('student_id', studentId)
       .gte('meal_date', mealStart).lte('meal_date', mealEnd).order('meal_date'),
     supabase.from('mess_calendar').select('calendar_date,status').eq('tenant_id', tenantId)
       .gte('calendar_date', start).lte('calendar_date', end),
+    supabase.from('monthly_bills').select('id,bill_month,published_fixed_items,published_daily_rate,status')
+      .eq('hostel_id', hostelId).eq('bill_month', start).eq('status', 'published').maybeSingle(),
+    supabase.from('student_monthly_charges').select('extras_total,fine_days,fine_total')
+      .eq('student_id', studentId).eq('bill_month', start).maybeSingle(),
   ]);
   if (mealResult.error) throw mealResult.error;
   if (closedDaysResult.error) throw closedDaysResult.error;
+  if (billResult.error && !isUnavailableBillingTableError(billResult.error)) throw billResult.error;
+  if (chargesResult.error && !isUnavailableBillingTableError(chargesResult.error)) throw chargesResult.error;
   return {
     days: Object.fromEntries((mealResult.data || []).map(row => [row.meal_date, row.meal_code.trim()])),
     closedDays: Object.fromEntries((closedDaysResult.data || []).map(day => [day.calendar_date, day.status])),
+    bill: billResult.error ? null : (billResult.data || null),
+    charges: chargesResult.error ? { extras_total: 0, fine_days: 0, fine_total: 0 } : (chargesResult.data || { extras_total: 0, fine_days: 0, fine_total: 0 }),
   };
 }
 
@@ -219,6 +235,7 @@ export default function App() {
   const [messRules, setMessRules] = useState({ lock_days_before: 1, lock_time: '19:00:00', timezone: 'Asia/Kolkata' });
   const [closedDays, setClosedDays] = useState({});
   const [summaryModal, setSummaryModal] = useState('');
+  const [publishedBillMonths, setPublishedBillMonths] = useState([]);
   const [rangeStart, setRangeStart] = useState(null);
   const [rangeEnd, setRangeEnd] = useState(null);
   const [rangeError, setRangeError] = useState('');
@@ -229,14 +246,33 @@ export default function App() {
   const welcomeNameRef = useRef(null);
 
   const dates = useMemo(() => datesForMonth(selectedMonth), [selectedMonth]);
-  const monthChoices = useMemo(() => [-1, 0, 1].map(offset => {
-    const key = shiftMonthKey(currentMonth, offset);
-    return { key, label: monthLabel(key), relative: offset === -1 ? 'Previous month' : offset === 0 ? 'Current month' : 'Next month' };
-  }), [currentMonth]);
+  const monthChoices = useMemo(() => {
+    const navigationMonths = [-1, 0, 1].map(offset => shiftMonthKey(currentMonth, offset));
+    const navigationMonthSet = new Set(navigationMonths);
+    const additionalBillMonths = publishedBillMonths
+      .filter(month => !navigationMonthSet.has(month))
+      .sort((first, second) => second.localeCompare(first));
+    return [...navigationMonths, ...additionalBillMonths].map(key => ({
+      key,
+      label: monthLabel(key),
+      relative: key === navigationMonths[0] ? 'Previous month'
+        : key === navigationMonths[1] ? 'Current month'
+          : key === navigationMonths[2] ? 'Next month' : 'Published bill',
+    }));
+  }, [currentMonth, publishedBillMonths]);
   const visibleDays = loadedMonth === selectedMonth ? (student?.days || {}) : {};
-  const summaryMonthIsCurrent = selectedMonth === currentMonth;
   const isDateLocked = date => locked(date, messRules, closedDays);
   const total = useMemo(() => student && loadedMonth === selectedMonth ? billable(student.days, dates) : null, [student, loadedMonth, selectedMonth, dates]);
+  const selectedBill = loadedMonth === selectedMonth ? student?.bill : null;
+  const selectedCharges = loadedMonth === selectedMonth ? (student?.charges || {}) : {};
+  const fixedBillItems = selectedBill?.published_fixed_items || [];
+  const fixedBillTotal = fixedBillItems.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const dailyRate = Number(selectedBill?.published_daily_rate || 0);
+  const messFee = dailyRate * Number(total || 0);
+  const extrasTotal = Number(selectedCharges.extras_total || 0);
+  const fineTotal = Number(selectedCharges.fine_total || 0);
+  const fineDays = Number(selectedCharges.fine_days || 0);
+  const totalBill = selectedBill ? fixedBillTotal + messFee + extrasTotal + fineTotal : null;
   const selectedRangeDates = rangeStart && rangeEnd
     ? dates.filter(date => date >= rangeStart && date <= rangeEnd)
     : [];
@@ -341,6 +377,38 @@ export default function App() {
     return () => { active = false; window.clearInterval(intervalId); };
   }, [student?.studentId]);
 
+  useEffect(() => {
+    if (!student?.studentId || !student?.hostelId || !supabase || loadedMonth !== selectedMonth) return undefined;
+    let active = true;
+    const refreshPublishedBill = async () => {
+      const billMonth = monthBounds(selectedMonth).start;
+      const [billResult, chargesResult, monthsResult] = await Promise.all([
+        supabase.from('monthly_bills').select('id,bill_month,published_fixed_items,published_daily_rate,status')
+          .eq('hostel_id', student.hostelId).eq('bill_month', billMonth).eq('status', 'published').maybeSingle(),
+        supabase.from('student_monthly_charges').select('extras_total,fine_days,fine_total')
+          .eq('student_id', student.studentId).eq('bill_month', billMonth).maybeSingle(),
+        supabase.from('monthly_bills').select('bill_month').eq('hostel_id', student.hostelId)
+          .eq('status', 'published').order('bill_month', { ascending: false }),
+      ]);
+      if (!active) return;
+      if (!billResult.error && !chargesResult.error) {
+        setStudent(current => current ? {
+          ...current,
+          bill: billResult.data || null,
+          charges: chargesResult.data || { extras_total: 0, fine_days: 0, fine_total: 0 },
+        } : current);
+      }
+      if (!monthsResult.error) setPublishedBillMonths([...new Set((monthsResult.data || []).map(row => String(row.bill_month).slice(0, 7)))]);
+    };
+    const intervalId = window.setInterval(refreshPublishedBill, 30000);
+    window.addEventListener('focus', refreshPublishedBill);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshPublishedBill);
+    };
+  }, [loadedMonth, selectedMonth, student?.hostelId, student?.studentId]);
+
   function dismissNotice() {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     noticeTimer.current = null;
@@ -411,11 +479,14 @@ export default function App() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      const [monthData, settingsResult] = await Promise.all([
-        fetchStudentMonthData(profile.id, profile.tenant_id, loginMonth),
+      const [monthData, settingsResult, publishedBillsResult] = await Promise.all([
+        fetchStudentMonthData(profile.id, profile.tenant_id, profile.hostel_id, loginMonth),
         supabase.from('mess_settings').select('lock_days_before,lock_time,timezone').eq('tenant_id', profile.tenant_id).maybeSingle(),
+        supabase.from('monthly_bills').select('bill_month').eq('hostel_id', profile.hostel_id).eq('status', 'published').order('bill_month', { ascending: false }),
       ]);
       if (settingsResult.error) throw settingsResult.error;
+      if (publishedBillsResult.error && !isUnavailableBillingTableError(publishedBillsResult.error)) throw publishedBillsResult.error;
+      setPublishedBillMonths(publishedBillsResult.error ? [] : [...new Set((publishedBillsResult.data || []).map(row => String(row.bill_month).slice(0, 7)))]);
 
       setStudent({
         id: profile.account_number,
@@ -435,6 +506,9 @@ export default function App() {
         days: monthData.days,
         studentId: profile.id,
         tenantId: profile.tenant_id,
+        hostelId: profile.hostel_id,
+        bill: monthData.bill,
+        charges: monthData.charges,
       });
       setLoadedMonth(loginMonth);
       setNotifications(notificationReadError ? [] : (notificationRows || []));
@@ -454,7 +528,7 @@ export default function App() {
 
   async function selectMonth(monthKey) {
     setMonthPickerOpen(false);
-    if (!student || !supabase || !monthChoices.some(month => month.key === monthKey)) return;
+    if (!student || !supabase || !/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) return;
     if (monthKey === selectedMonth && (loadedMonth === selectedMonth || monthLoading)) return;
     const requestId = monthRequestRef.current + 1;
     monthRequestRef.current = requestId;
@@ -469,9 +543,9 @@ export default function App() {
     setRangeError('');
     dismissNotice();
     try {
-      const monthData = await fetchStudentMonthData(student.studentId, student.tenantId, monthKey);
+      const monthData = await fetchStudentMonthData(student.studentId, student.tenantId, student.hostelId, monthKey);
       if (monthRequestRef.current !== requestId) return;
-      setStudent(current => current ? { ...current, days: monthData.days } : current);
+      setStudent(current => current ? { ...current, days: monthData.days, bill: monthData.bill, charges: monthData.charges } : current);
       setClosedDays(monthData.closedDays);
       setLoadedMonth(monthKey);
     } catch (monthError) {
@@ -523,6 +597,12 @@ export default function App() {
     try {
       const { error: updateError } = await supabase.auth.updateUser({ password: recoveryPassword });
       if (updateError) throw updateError;
+      try {
+        const { error: activityError } = await supabase.rpc('log_student_password_change');
+        if (activityError) console.warn('Student password change could not be added to activity history.', activityError);
+      } catch (activityError) {
+        console.warn('Student password change could not be added to activity history.', activityError);
+      }
       setRecoveryPassword('');
       setConfirmRecoveryPassword('');
       window.sessionStorage.removeItem(passwordRecoveryStorageKey);
@@ -727,10 +807,19 @@ export default function App() {
       const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
       if (updateError) throw updateError;
 
+      let activityError;
+      try {
+        ({ error: activityError } = await supabase.rpc('log_student_password_change'));
+      } catch (logError) {
+        activityError = logError;
+      }
+
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      setPasswordMessage('Your password has been updated.');
+      setPasswordMessage(activityError
+        ? 'Your password has been updated, but the activity log could not be recorded. Please contact an administrator.'
+        : 'Your password has been updated.');
     } catch (updateError) {
       setPasswordError(updateError.message || 'Unable to update your password. Please try again.');
     } finally {
@@ -756,6 +845,7 @@ export default function App() {
     setMonthLoading(false);
     setMonthPickerOpen(false);
     setStudent(null);
+    setPublishedBillMonths([]);
     setNotifications([]);
     setSelected(null);
     setFoodOpen(false);
@@ -1174,13 +1264,13 @@ export default function App() {
                 <button type="button" className="summary-item summary-extras" onClick={() => openSummaryModal('extra-dishes')}>
                   <span className="summary-item-icon"><Icon name="cloche" size={38} /></span>
                   <span className="summary-item-divider" />
-                  <span className="summary-item-copy"><b>₹ 0</b><span>Extra Dishes</span></span>
+                  <span className="summary-item-copy"><b>{loadedMonth === selectedMonth ? formatCurrency(extrasTotal) : '—'}</b><span>Extra Dishes</span></span>
                   <Icon name="chevron" className="summary-item-chevron" size={30} />
                 </button>
                 <button type="button" className="summary-item summary-total" onClick={() => openSummaryModal('total-bill')}>
                   <span className="summary-item-icon"><Icon name="receipt" size={38} /></span>
                   <span className="summary-item-divider" />
-                  <span className="summary-item-copy"><b>N/A</b><span>Total Bill</span></span>
+                  <span className="summary-item-copy"><b>{totalBill === null ? 'N/A' : formatCurrency(totalBill)}</b><span>Total Bill</span></span>
                   <Icon name="chevron" className="summary-item-chevron" size={30} />
                 </button>
               </div>
@@ -1317,12 +1407,17 @@ export default function App() {
 
             {summaryModal === 'total-bill' && (
               <div className="summary-bill-details">
-                <div className="summary-bill-amount"><span>Total for {monthLabel(selectedMonth)}</span><b>{summaryMonthIsCurrent ? 'N/A' : 'Not uploaded'}</b></div>
-                {summaryMonthIsCurrent ? (
-                  <p className="summary-bill-message">Bill not generated yet</p>
+                <div className="summary-bill-amount"><span>Total for {monthLabel(selectedMonth)}</span><b>{totalBill === null ? 'N/A' : formatCurrency(totalBill)}</b></div>
+                {totalBill === null ? (
+                  <div className="summary-empty-state summary-bill-empty"><p>Bill not generated yet</p></div>
                 ) : (
-                  <div className="summary-empty-state summary-bill-empty">
-                    <p>No bill has been uploaded for {monthLabel(selectedMonth)} yet. The bill split-up will appear here when available.</p>
+                  <div className="summary-bill-breakdown">
+                    <div className="summary-bill-breakdown-heading"><span>Item</span><span>Amount</span></div>
+                    {fixedBillItems.map((item, index) => <div className="summary-bill-line" key={item.key || `${item.label}-${index}`}><span>{item.label}</span><b>{formatCurrency(item.amount)}</b></div>)}
+                    <div className="summary-bill-line"><span>Mess Fee <small>({formatCurrency(dailyRate)} × {total ?? 0} days)</small></span><b>{formatCurrency(messFee)}</b></div>
+                    <div className="summary-bill-line"><span>Extras total</span><b>{formatCurrency(extrasTotal)}</b></div>
+                    <div className="summary-bill-line"><span>Fine <small>({fineDays} fined day{fineDays === 1 ? '' : 's'})</small></span><b>{formatCurrency(fineTotal)}</b></div>
+                    <div className="summary-bill-line summary-bill-grand-total"><span>Total amount</span><b>{formatCurrency(totalBill)}</b></div>
                   </div>
                 )}
               </div>

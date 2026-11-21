@@ -15,7 +15,21 @@ function reply(body: unknown, status = 200) {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const detail = error as Record<string, unknown>;
+    const parts = [detail.message, detail.details, detail.hint, detail.code]
+      .filter(value => typeof value === 'string' && value.trim()) as string[];
+    return parts.join(' · ') || JSON.stringify(error);
+  }
+  return String(error);
+}
+
+function isMissingMonthlyChargesTable(error: unknown) {
+  const detail = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const message = String(detail.message || error || '').toLowerCase();
+  return detail.code === 'PGRST205'
+    || (message.includes('schema cache') && message.includes('student_monthly_charges'));
 }
 
 function fail(message: string, status = 400) {
@@ -114,24 +128,41 @@ function billableDayCount(mealsByDate: Map<string, string>, month: string) {
 async function loadDaysDownload(scope: { hostels: any[]; hostelIds: string[] }, month: string) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw fail('Choose a valid calendar month.');
   const { mealStart, mealEnd } = monthDates(month);
+  const [year, monthNumber] = month.split('-').map(Number);
+  const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   const students = await fetchAllRows((from, to) => adminDb.from('students')
     .select('id,account_number,room,full_name,hostel_id,academic_year,department,hostels(name)')
     .in('hostel_id', scope.hostelIds).order('account_number').range(from, to));
   const mealRows = await fetchAllRows((from, to) => adminDb.from('meal_days')
     .select('student_id,meal_date,meal_code,students!inner(hostel_id)')
     .in('students.hostel_id', scope.hostelIds).gte('meal_date', mealStart).lte('meal_date', mealEnd).range(from, to));
+  let chargeRows = [];
+  try {
+    chargeRows = await fetchAllRows((from, to) => adminDb.from('student_monthly_charges')
+      .select('student_id,extras_total,fine_days,fine_total,students!inner(hostel_id)')
+      .in('students.hostel_id', scope.hostelIds).eq('bill_month', `${month}-01`).range(from, to));
+  } catch (error) {
+    if (!isMissingMonthlyChargesTable(error)) throw error;
+  }
   const mealsByStudent = new Map<string, Map<string, string>>();
   for (const meal of mealRows) {
     if (!mealsByStudent.has(meal.student_id)) mealsByStudent.set(meal.student_id, new Map());
     mealsByStudent.get(meal.student_id)!.set(meal.meal_date, String(meal.meal_code || '----').trim());
   }
+  const chargesByStudent = new Map((chargeRows || []).map(row => [row.student_id, row]));
   return {
     month,
     students: students.map(student => ({
       ...student,
       days: billableDayCount(mealsByStudent.get(student.id) || new Map(), month),
-      finedDays: null,
-      extrasTotal: null,
+      dailyStatuses: Array.from({ length: daysInMonth }, (_, index) => {
+        const date = `${month}-${String(index + 1).padStart(2, '0')}`;
+        const mealCode = mealsByStudent.get(student.id)?.get(date);
+        return mealCode == null ? '' : mealCode === '----' ? 'X' : '·';
+      }),
+      finedDays: Number(chargesByStudent.get(student.id)?.fine_days || 0),
+      fineTotal: Number(chargesByStudent.get(student.id)?.fine_total || 0),
+      extrasTotal: Number(chargesByStudent.get(student.id)?.extras_total || 0),
     })),
   };
 }
